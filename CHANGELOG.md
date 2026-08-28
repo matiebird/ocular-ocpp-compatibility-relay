@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Replace the optional Buy Me a Coffee support link with Ko-fi.
+
 ## 0.3.2
 
 - Publish the compatibility relay as a standalone public project.

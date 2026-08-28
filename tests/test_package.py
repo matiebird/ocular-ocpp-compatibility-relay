@@ -36,7 +36,8 @@ class PackageTests(unittest.TestCase):
         repository_url = "https://github.com/matiebird/ocular-ocpp-compatibility-relay"
         self.assertIn(f'url: "{repository_url}"', config)
         self.assertIn(repository_url, readme)
-        self.assertIn("https://buymeacoffee.com/Matiebird", readme)
+        self.assertIn("https://ko-fi.com/matiebird", readme)
+        self.assertNotIn("buymeacoffee.com", readme.lower())
         self.assertIn("entirely optional", readme.lower())
         self.assertIn("does not affect access", readme.lower())
 

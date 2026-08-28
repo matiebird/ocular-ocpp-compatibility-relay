@@ -184,7 +184,7 @@ The app:
 
 ## Optional support
 
-This workaround is free to use. If it saved you time and you would like to support further testing and documentation, you can optionally [buy me a coffee](https://buymeacoffee.com/Matiebird).
+This workaround is free to use. If it saved you time and you would like to support further testing and documentation, you can optionally [leave a tip or donation on Ko-fi](https://ko-fi.com/matiebird).
 
 Support is entirely optional. It does not affect access to the software, documentation, updates or community help.
 

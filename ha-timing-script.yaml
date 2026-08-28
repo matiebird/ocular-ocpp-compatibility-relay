@@ -1,0 +1,52 @@
+alias: Ocular OCPP - apply stable timing
+mode: single
+icon: mdi:ev-station
+description: >-
+  Sets the charger heartbeat, charger WebSocket ping and meter reporting intervals,
+  then reads all three values back. Edit ocpp_device_id if your OCPP device uses
+  a different Home Assistant device ID.
+variables:
+  ocpp_device_id: ocular
+sequence:
+  - action: ocpp.configure
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: HeartbeatInterval
+      value: "60"
+  - delay: "00:00:02"
+  - action: ocpp.configure
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: WebSocketPingInterval
+      value: "60"
+  - delay: "00:00:02"
+  - action: ocpp.configure
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: MeterValueSampleInterval
+      value: "10"
+  - delay: "00:00:02"
+  - action: ocpp.get_configuration
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: HeartbeatInterval
+    response_variable: heartbeat_readback
+  - action: ocpp.get_configuration
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: WebSocketPingInterval
+    response_variable: websocket_readback
+  - action: ocpp.get_configuration
+    data:
+      devid: "{{ ocpp_device_id }}"
+      ocpp_key: MeterValueSampleInterval
+    response_variable: meter_readback
+  - action: persistent_notification.create
+    data:
+      title: Ocular OCPP timing readback
+      message: |-
+        HeartbeatInterval: {{ heartbeat_readback.value | default(heartbeat_readback) }}
+        WebSocketPingInterval: {{ websocket_readback.value | default(websocket_readback) }}
+        MeterValueSampleInterval: {{ meter_readback.value | default(meter_readback) }}
+
+        Expected values: 60, 60 and 10. Run this again after a Soft Reset or power cycle.

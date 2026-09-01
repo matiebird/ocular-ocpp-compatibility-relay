@@ -93,6 +93,17 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("battery_soc", controls.lower())
         self.assertNotIn("solar_forecast", controls.lower())
 
+    def test_ssh_wording_is_method_agnostic(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        examples = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn("SSH session", readme)
+        self.assertIn("SSH session", examples)
+        for text in (readme, examples, installer):
+            self.assertNotIn("Advanced SSH & Web Terminal", text)
+            self.assertNotIn("Terminal app", text)
+
     def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for relative_path in (

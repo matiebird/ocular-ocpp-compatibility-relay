@@ -72,7 +72,7 @@ If `Current Import` or `Power Active Import` is missing, open the OCPP integrati
 
 4. Set the `input_number.ocular_charge_current` maximum no higher than the lowest commissioned limit of the charger, circuit, cable, vehicle and site. The example shows the charger's supported **6 A** to **32 A** range; a lower installation limit must remain lower.
 
-5. In Advanced SSH & Web Terminal, check the configuration:
+5. In an SSH session on the Home Assistant host, check the configuration:
 
    ```bash
    ha core check

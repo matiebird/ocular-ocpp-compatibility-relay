@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Install from Home Assistant's Advanced SSH & Web Terminal app.
+# Install from an SSH session on the Home Assistant host.
 # Usage: bash install.sh CHARGER_IP HOME_ASSISTANT_IP [CHARGE_POINT_ID] [HA_OCPP_PORT]
 # Example: bash install.sh 192.168.1.50 192.168.1.10 central 9000
 
@@ -73,7 +73,7 @@ is_ipv4 "$HOME_ASSISTANT_IP" || { printf 'Invalid Home Assistant IPv4 address: %
   exit 2
 }
 command -v ha >/dev/null || {
-  printf 'Home Assistant CLI not found. Run this from the Advanced SSH & Web Terminal app.\n' >&2
+  printf 'Home Assistant CLI not found. Use an SSH session on a Home Assistant OS or Supervised host with the ha command available.\n' >&2
   exit 2
 }
 [[ -d /addons ]] || {

@@ -10,7 +10,7 @@ RUN python -m unittest discover -s tests -v
 
 FROM python:3.12-alpine
 LABEL org.opencontainers.image.title="Ocular OCPP Compatibility Relay" \
-      org.opencontainers.image.version="0.3.6"
+      org.opencontainers.image.version="0.3.7"
 RUN pip install --no-cache-dir websockets==12.0 && \
     addgroup -S proxy && adduser -S -G proxy proxy
 WORKDIR /app

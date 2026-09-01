@@ -22,7 +22,7 @@ The existing Home Assistant OCPP listener stays where it is. The installer does 
 ## Requirements
 
 - Home Assistant OS or Home Assistant Supervised
-- Advanced SSH or Web Terminal app
+- A working SSH session on the Home Assistant host with access to the Home Assistant CLI (`ha`)
 - Home Assistant OCPP integration already running, normally on port 9000
 - Ocular charger on wired Ethernet with a reserved DHCP address
 - Charger configured for OCPP 1.6J over plain `WS` on a trusted home LAN
@@ -37,7 +37,7 @@ Supported Home Assistant host architectures:
 The setup requires access to:
 
 1. The router's device list, to identify the charger and Home Assistant LAN addresses.
-2. Home Assistant's Advanced SSH & Web Terminal app, to run the installer command.
+2. A working SSH session on the Home Assistant host, to run the installer command.
 3. [OCPPSetTool for Android](https://play.google.com/store/apps/details?id=com.evsemaster.ocppset) or [OCPPSetTool for iPhone](https://apps.apple.com/au/app/ocppsettool/id6504644430), to enter the values printed by the installer.
 
 The installer does not require Python, Docker or Home Assistant internal-storage edits. Changing the physical charger's endpoint remains a separate OCPPSetTool step and cannot be automated by a Home Assistant app.
@@ -66,7 +66,7 @@ Download the latest `ocular-ocpp-easy-deploy` ZIP from the [GitHub releases page
 
 ### 2. Run the installer
 
-Open Advanced SSH or Web Terminal and run:
+Establish an SSH session to the Home Assistant host and run:
 
 ```bash
 bash /config/ocular-ocpp-easy-deploy/install.sh CHARGER_IP HOME_ASSISTANT_IP
@@ -147,7 +147,7 @@ For a compact value-only view, use this labelled reference:
 
 ## Check that it connected
 
-Run:
+In the same SSH session, run:
 
 ```bash
 ha apps logs local_ocular_ocpp_compatibility_relay
@@ -226,7 +226,7 @@ Do not judge success from a service call alone. Use fresh charger current and po
 
 ## Remove it
 
-Run:
+Establish an SSH session to the Home Assistant host and run:
 
 ```bash
 cd /config/ocular-ocpp-easy-deploy

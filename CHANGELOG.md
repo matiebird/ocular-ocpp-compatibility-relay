@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.7
+
+- Make all SSH instructions connection-method agnostic.
+- Require only a working SSH session on the Home Assistant host with the `ha` command available.
+- Remove references that prescribe a particular SSH app or terminal interface.
+
 ## 0.3.6
 
 - Add plain-language, generic Home Assistant controls for Start, Pause, Resume and Stop.

@@ -22,7 +22,7 @@ The existing Home Assistant OCPP listener stays where it is. The installer does 
 ## Requirements
 
 - Home Assistant OS or Home Assistant Supervised
-- Advanced SSH & Web Terminal app
+- Advanced SSH or Web Terminal app
 - Home Assistant OCPP integration already running, normally on port 9000
 - Ocular charger on wired Ethernet with a reserved DHCP address
 - Charger configured for OCPP 1.6J over plain `WS` on a trusted home LAN

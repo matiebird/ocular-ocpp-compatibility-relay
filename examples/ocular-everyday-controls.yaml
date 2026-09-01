@@ -1,0 +1,295 @@
+# Ocular LTE Plus v3 — everyday Home Assistant controls
+#
+# Copy this file to /config/packages/ocular_everyday_controls.yaml only after
+# completing examples/README.md. The entity IDs below assume the Home Assistant
+# OCPP charge-point ID is "ocular" and the charger has one connector.
+#
+# This package deliberately contains no solar, tariff, battery or reset policy.
+# Automatic terminal-taper stopping is OFF until the user enables its helper.
+
+input_number:
+  ocular_charge_current:
+    name: Ocular charging current
+    icon: mdi:current-ac
+    min: 6
+    max: 32
+    step: 1
+    initial: 6
+    unit_of_measurement: A
+    mode: slider
+
+input_boolean:
+  ocular_automatic_finish:
+    name: Ocular automatically finish after sustained taper
+    icon: mdi:ev-station
+    initial: false
+
+script:
+  ocular_start_charging:
+    alias: Ocular — start charging
+    icon: mdi:play-circle
+    mode: single
+    sequence:
+      - variables:
+          requested_amps: "{{ states('input_number.ocular_charge_current') | int(6) }}"
+          transaction_id: "{{ states('sensor.ocular_transaction_id') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ transaction_id not in ['unknown', 'unavailable', 'none', '']
+                     and transaction_id | int(-1) > 0 }}
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  title: Ocular charging already active
+                  message: >-
+                    A charging transaction is already active. Use Resume rather than
+                    starting another transaction.
+        default:
+          - action: number.set_value
+            target:
+              entity_id: number.ocular_maximum_current
+            data:
+              value: "{{ requested_amps }}"
+          - action: switch.turn_on
+            target:
+              entity_id: switch.ocular_charge_control
+          - wait_template: >-
+              {{ states('sensor.ocular_status_connector')
+                 in ['Charging', 'Preparing', 'SuspendedEV', 'SuspendedEVSE'] }}
+            timeout: "00:01:30"
+            continue_on_timeout: true
+          - if:
+              - condition: template
+                value_template: "{{ not wait.completed }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  title: Ocular start not verified
+                  message: >-
+                    Home Assistant requested charging, but the charger did not report
+                    Charging, Preparing or a suspended state within 90 seconds. Check
+                    the cable, vehicle and charger status before trying again.
+
+  ocular_pause_charging:
+    alias: Ocular — pause without ending the session
+    icon: mdi:pause-circle
+    mode: single
+    sequence:
+      - variables:
+          transaction_id: "{{ states('sensor.ocular_transaction_id') }}"
+      - condition: template
+        value_template: >-
+          {{ transaction_id not in ['unknown', 'unavailable', 'none', '']
+             and transaction_id | int(-1) > 0 }}
+      - action: ocpp.set_charge_rate
+        data:
+          devid: ocular
+          conn_id: 1
+          custom_profile: >-
+            {{ {
+              'chargingProfileId': 3001,
+              'transactionId': transaction_id | int,
+              'stackLevel': 1,
+              'chargingProfilePurpose': 'TxProfile',
+              'chargingProfileKind': 'Absolute',
+              'chargingSchedule': {
+                'chargingRateUnit': 'A',
+                'chargingSchedulePeriod': [
+                  {'startPeriod': 0, 'limit': 0, 'numberPhases': 1}
+                ]
+              }
+            } | to_json }}
+      - wait_template: >-
+          {{ states('sensor.ocular_status_connector') == 'SuspendedEVSE'
+             or (states('sensor.ocular_current_import') not in
+                 ['unknown', 'unavailable', 'none', '']
+                 and states('sensor.ocular_current_import') | float(-1) >= 0
+                 and states('sensor.ocular_current_import') | float(-1) <= 0.5) }}
+        timeout: "00:01:30"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              title: Ocular pause not verified
+              message: >-
+                The 0 A hold was sent, but zero current or SuspendedEVSE was not
+                confirmed within 90 seconds. Do not repeatedly press Pause; check the
+                live charger current and status first.
+
+  ocular_resume_charging:
+    alias: Ocular — resume the same session
+    icon: mdi:play-pause
+    mode: single
+    sequence:
+      - variables:
+          transaction_id: "{{ states('sensor.ocular_transaction_id') }}"
+          requested_amps: "{{ states('input_number.ocular_charge_current') | int(6) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ transaction_id not in ['unknown', 'unavailable', 'none', '']
+                     and transaction_id | int(-1) > 0 }}
+            sequence:
+              - action: ocpp.set_charge_rate
+                data:
+                  devid: ocular
+                  conn_id: 1
+                  custom_profile: >-
+                    {{ {
+                      'chargingProfileId': 3001,
+                      'transactionId': transaction_id | int,
+                      'stackLevel': 1,
+                      'chargingProfilePurpose': 'TxProfile',
+                      'chargingProfileKind': 'Absolute',
+                      'chargingSchedule': {
+                        'chargingRateUnit': 'A',
+                        'chargingSchedulePeriod': [
+                          {'startPeriod': 0, 'limit': requested_amps,
+                           'numberPhases': 1}
+                        ]
+                      }
+                    } | to_json }}
+              - wait_template: >-
+                  {{ states('sensor.ocular_status_connector') == 'Charging'
+                     or (states('sensor.ocular_current_import') not in
+                         ['unknown', 'unavailable', 'none', '']
+                         and states('sensor.ocular_current_import') | float(-1) > 1) }}
+                timeout: "00:01:30"
+                continue_on_timeout: true
+              - if:
+                  - condition: template
+                    value_template: "{{ not wait.completed }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: Ocular resume not verified
+                      message: >-
+                        Resume was requested, but charging current was not confirmed
+                        within 90 seconds. Check whether the vehicle is able to charge.
+        default:
+          - action: persistent_notification.create
+            data:
+              title: No Ocular session to resume
+              message: >-
+                There is no active transaction. Use Start charging to begin a new one.
+
+  ocular_stop_charging:
+    alias: Ocular — stop and finish the session
+    icon: mdi:stop-circle
+    mode: single
+    sequence:
+      - action: switch.turn_off
+        target:
+          entity_id: switch.ocular_charge_control
+      - wait_template: >-
+          {% set tx = states('sensor.ocular_transaction_id') %}
+          {% set amps = states('sensor.ocular_current_import') %}
+          {{ tx not in ['unknown', 'unavailable', 'none', '']
+             and tx | int(-1) == 0
+             and amps not in ['unknown', 'unavailable', 'none', '']
+             and amps | float(-1) >= 0
+             and amps | float(-1) <= 0.5
+             and states('sensor.ocular_status_connector')
+                 in ['Finishing', 'Available'] }}
+        timeout: "00:01:30"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              title: Ocular stop needs checking
+              message: >-
+                Home Assistant requested a final stop, but transaction ID 0, zero
+                current and Finishing or Available were not all confirmed within
+                90 seconds. Check the live charger state before issuing another command.
+
+  ocular_apply_stable_timing:
+    alias: Ocular — apply stable connection timing
+    icon: mdi:timer-cog
+    mode: single
+    sequence:
+      - action: ocpp.configure
+        data:
+          devid: ocular
+          ocpp_key: HeartbeatInterval
+          value: "60"
+      - delay: "00:00:02"
+      - action: ocpp.configure
+        data:
+          devid: ocular
+          ocpp_key: WebSocketPingInterval
+          value: "60"
+      - delay: "00:00:02"
+      - action: ocpp.configure
+        data:
+          devid: ocular
+          ocpp_key: MeterValueSampleInterval
+          value: "10"
+      - action: persistent_notification.create
+        data:
+          title: Ocular timing sent
+          message: >-
+            Requested heartbeat 60 seconds, WebSocket ping 60 seconds and meter
+            reporting 10 seconds. Use the supplied timing readback script if you need
+            to verify each stored value.
+
+automation:
+  - id: ocular_terminal_taper_finish_example
+    alias: Ocular — finish after sustained terminal taper
+    description: >-
+      Optional example. When enabled, requests a normal final stop after fresh OCPP
+      state remains in the tested terminal-taper band for 15 minutes.
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >-
+          {% set tx = states('sensor.ocular_transaction_id') %}
+          {% set amps = states('sensor.ocular_current_import') %}
+          {% set target = states('input_number.ocular_charge_current') %}
+          {% set heartbeat = states('sensor.ocular_heartbeat') %}
+          {{ is_state('input_boolean.ocular_automatic_finish', 'on')
+             and is_state('switch.ocular_charge_control', 'on')
+             and is_state('sensor.ocular_status_connector', 'Charging')
+             and heartbeat not in ['unknown', 'unavailable', 'none', '']
+             and (as_timestamp(now()) - as_timestamp(heartbeat, 0)) < 120
+             and tx not in ['unknown', 'unavailable', 'none', '']
+             and tx | int(-1) > 0
+             and amps not in ['unknown', 'unavailable', 'none', '']
+             and amps | float(-1) > 1
+             and amps | float(-1) <= 3
+             and target not in ['unknown', 'unavailable', 'none', '']
+             and target | float(0) >= 6 }}
+        for:
+          minutes: 15
+    action:
+      - action: script.ocular_stop_charging
+
+  - id: ocular_connector_fault_notification_example
+    alias: Ocular — notify when the connector reports a fault
+    description: Creates a Home Assistant notification for a fresh non-NoError fault.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.ocular_error_code_connector
+    condition:
+      - condition: template
+        value_template: >-
+          {{ trigger.from_state is not none
+             and trigger.to_state is not none
+             and trigger.to_state.state not in
+                 ['NoError', 'noerror', 'unknown', 'unavailable', 'none', ''] }}
+    action:
+      - action: persistent_notification.create
+        data:
+          title: Ocular charger fault
+          message: >-
+            The charger reported {{ trigger.to_state.state }}. Check the charger and
+            cable. Do not reset it merely because it is suspended or finishing.

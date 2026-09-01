@@ -80,7 +80,7 @@ command -v ha >/dev/null || {
   printf '/addons is unavailable. This package requires Home Assistant OS or Supervised.\n' >&2
   exit 2
 }
-for required in config.yaml Dockerfile README.md CHARGER_CONTROL_WORKAROUNDS.md docs/images/connection-overview.svg docs/images/ocular-settings-reference.svg proxy/main.py proxy/server.py tests/test_server.py; do
+for required in config.yaml Dockerfile README.md CHARGER_CONTROL_WORKAROUNDS.md examples/README.md examples/ocular-everyday-controls.yaml examples/ocular-dashboard-card.yaml docs/images/connection-overview.svg docs/images/ocular-settings-reference.svg proxy/main.py proxy/server.py tests/test_server.py; do
   [[ -f "$SOURCE_DIR/$required" ]] || { printf 'Package is incomplete: missing %s\n' "$required" >&2; exit 2; }
 done
 
@@ -124,6 +124,7 @@ cp -a \
   "$SOURCE_DIR/README.md" \
   "$SOURCE_DIR/CHARGER_CONTROL_WORKAROUNDS.md" \
   "$SOURCE_DIR/docs" \
+  "$SOURCE_DIR/examples" \
   "$SOURCE_DIR/proxy" \
   "$SOURCE_DIR/tests" \
   "$TARGET_DIR/"

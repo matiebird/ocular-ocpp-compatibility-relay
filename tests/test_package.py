@@ -20,6 +20,7 @@ class PackageTests(unittest.TestCase):
             "ha-timing-script.yaml",
             "README.md",
             "CHARGER_CONTROL_WORKAROUNDS.md",
+            "examples",
         ):
             self.assertIn(name, dockerfile)
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
@@ -29,6 +30,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn('"$SOURCE_DIR/README.md"', installer)
         self.assertIn('"$SOURCE_DIR/CHARGER_CONTROL_WORKAROUNDS.md"', installer)
         self.assertIn('"$SOURCE_DIR/docs"', installer)
+        self.assertIn('"$SOURCE_DIR/examples"', installer)
 
     def test_community_control_workarounds_are_packaged(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -46,6 +48,50 @@ class PackageTests(unittest.TestCase):
         self.assertIn("terminal-taper candidate", guide)
         self.assertIn("transaction ID 0", guide)
         self.assertNotIn("192.168.0.", guide)
+
+    def test_generic_everyday_control_examples_are_safe_and_packaged(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        example_guide = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+        controls = (ROOT / "examples" / "ocular-everyday-controls.yaml").read_text(
+            encoding="utf-8"
+        )
+        dashboard = (ROOT / "examples" / "ocular-dashboard-card.yaml").read_text(
+            encoding="utf-8"
+        )
+
+        for relative_path in (
+            "examples/README.md",
+            "examples/ocular-everyday-controls.yaml",
+            "examples/ocular-dashboard-card.yaml",
+        ):
+            self.assertIn(relative_path, readme)
+            self.assertTrue((ROOT / relative_path).is_file())
+
+        self.assertIn("input_boolean:", controls)
+        self.assertIn("initial: false", controls)
+        self.assertIn("ocular_start_charging:", controls)
+        self.assertIn("ocular_pause_charging:", controls)
+        self.assertIn("ocular_resume_charging:", controls)
+        self.assertIn("ocular_stop_charging:", controls)
+        self.assertIn("chargingProfilePurpose", controls)
+        self.assertIn("TxProfile", controls)
+        self.assertIn("transactionId", controls)
+        self.assertIn("limit", controls)
+        self.assertIn("minutes: 15", controls)
+        self.assertIn("above 1 A and at or below 3 A", example_guide)
+        self.assertIn("6 A", example_guide)
+        self.assertIn("32 A", example_guide)
+        self.assertIn("script.ocular_start_charging", dashboard)
+        self.assertIn("script.ocular_stop_charging", dashboard)
+
+        # These examples are generic charger controls, not this installation's
+        # solar/battery policy, and reset is never an everyday action.
+        self.assertNotIn("ocpp.reset", controls)
+        self.assertNotIn("Hard Reset", controls)
+        self.assertNotRegex(controls, r"192\.168\.\d+\.\d+")
+        self.assertNotIn("sungrow", controls.lower())
+        self.assertNotIn("battery_soc", controls.lower())
+        self.assertNotIn("solar_forecast", controls.lower())
 
     def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

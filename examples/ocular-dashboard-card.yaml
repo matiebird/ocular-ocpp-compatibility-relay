@@ -1,0 +1,77 @@
+# Paste these cards into a Manual card or a YAML dashboard after installing
+# ocular-everyday-controls.yaml. This uses only built-in Home Assistant cards.
+# Replace the sensor/entity IDs if your OCPP charge-point ID is not "ocular".
+
+type: vertical-stack
+cards:
+  - type: markdown
+    content: |-
+      ## Ocular EV charger
+      **Start** begins a new session. **Pause** holds the active session at 0 A.
+      **Resume** continues that same session. **Stop** ends it.
+
+  - type: entities
+    title: Charging controls
+    show_header_toggle: false
+    entities:
+      - entity: input_number.ocular_charge_current
+        name: Charging current
+      - entity: input_boolean.ocular_automatic_finish
+        name: Automatically finish sustained taper
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Start
+        icon: mdi:play-circle
+        tap_action:
+          action: call-service
+          service: script.ocular_start_charging
+      - type: button
+        name: Pause
+        icon: mdi:pause-circle
+        tap_action:
+          action: call-service
+          service: script.ocular_pause_charging
+      - type: button
+        name: Resume
+        icon: mdi:play-pause
+        tap_action:
+          action: call-service
+          service: script.ocular_resume_charging
+      - type: button
+        name: Stop
+        icon: mdi:stop-circle
+        tap_action:
+          action: call-service
+          service: script.ocular_stop_charging
+        confirmation:
+          text: End the current charging session?
+
+  - type: entities
+    title: Live charger state
+    show_header_toggle: false
+    entities:
+      - entity: sensor.ocular_status_connector
+        name: Status
+      - entity: sensor.ocular_current_import
+        name: Current
+      - entity: sensor.ocular_power_active_import
+        name: Power
+      - entity: sensor.ocular_session_energy
+        name: Session energy
+      - entity: sensor.ocular_transaction_id
+        name: Transaction ID
+      - entity: sensor.ocular_error_code_connector
+        name: Connector error
+      - entity: sensor.ocular_heartbeat
+        name: Last heartbeat
+
+  - type: button
+    name: Reapply stable connection timing
+    icon: mdi:timer-cog
+    tap_action:
+      action: call-service
+      service: script.ocular_apply_stable_timing
+    confirmation:
+      text: Apply the tested 60/60/10 timing values to this charger?

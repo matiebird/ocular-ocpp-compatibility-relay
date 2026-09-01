@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+- Add plain-language, generic Home Assistant controls for Start, Pause, Resume and Stop.
+- Add a commissioned-current helper, optional sustained-taper completion and charger-fault notification.
+- Add a dashboard example using only built-in Home Assistant cards.
+- Keep site-specific solar, tariff and battery policy out of the public examples.
+
 ## 0.3.5
 
 - Add genuine OCPPSetTool interface captures from Ocular's official LTE Plus v3 guide.

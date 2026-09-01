@@ -189,6 +189,15 @@ ocpp_device_id: ocular
 
 Run the script only after the charger is connected. Read the values back again after a Soft Reset or power cycle because this firmware may reset `HeartbeatInterval` to `3600`.
 
+## Everyday Home Assistant controls
+
+For a simple charger dashboard, use the generic examples in [`examples/README.md`](examples/README.md):
+
+- [`examples/ocular-everyday-controls.yaml`](examples/ocular-everyday-controls.yaml) — Start, transaction-preserving Pause, same-session Resume, final Stop, current selection, optional sustained-taper finishing and fault notification.
+- [`examples/ocular-dashboard-card.yaml`](examples/ocular-dashboard-card.yaml) — a dashboard built only from standard Home Assistant cards.
+
+These examples are intentionally independent of any particular home's solar, tariff or battery policy. Automatic finishing is disabled until the user enables it, and routine reset controls are deliberately excluded.
+
 ## Charger control workarounds
 
 The connection relay is only one part of a reliable installation. See [Ocular charger control workarounds](CHARGER_CONTROL_WORKAROUNDS.md) for the field-tested transaction and recovery rules:

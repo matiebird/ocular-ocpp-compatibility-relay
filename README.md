@@ -66,7 +66,7 @@ Download the latest `ocular-ocpp-easy-deploy` ZIP from the [GitHub releases page
 
 ### 2. Run the installer
 
-Open Advanced SSH & Web Terminal and run:
+Open Advanced SSH or Web Terminal and run:
 
 ```bash
 bash /config/ocular-ocpp-easy-deploy/install.sh CHARGER_IP HOME_ASSISTANT_IP

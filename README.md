@@ -40,6 +40,8 @@ The setup requires access to:
 2. A working SSH session on the Home Assistant host, to run the installer command.
 3. [OCPPSetTool for Android](https://play.google.com/store/apps/details?id=com.evsemaster.ocppset) or [OCPPSetTool for iPhone](https://apps.apple.com/au/app/ocppsettool/id6504644430), to enter the values printed by the installer.
 
+Any method that provides the required SSH session is suitable. Home Assistant app examples include **Terminal & SSH** and **Advanced SSH & Web Terminal**. A separate SSH client is also suitable when the resulting session has the `ha` command available.
+
 The installer does not require Python, Docker or Home Assistant internal-storage edits. Changing the physical charger's endpoint remains a separate OCPPSetTool step and cannot be automated by a Home Assistant app.
 
 ![Connection overview](docs/images/connection-overview.svg)

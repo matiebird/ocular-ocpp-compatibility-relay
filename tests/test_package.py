@@ -93,16 +93,22 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("battery_soc", controls.lower())
         self.assertNotIn("solar_forecast", controls.lower())
 
-    def test_ssh_wording_is_method_agnostic(self):
+    def test_ssh_wording_is_method_agnostic_with_optional_app_examples(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         examples = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        requirements = readme.split("## Requirements", 1)[1].split(
+            "Supported Home Assistant host architectures", 1
+        )[0]
 
         self.assertIn("SSH session", readme)
         self.assertIn("SSH session", examples)
-        for text in (readme, examples, installer):
-            self.assertNotIn("Advanced SSH & Web Terminal", text)
-            self.assertNotIn("Terminal app", text)
+        self.assertIn("Terminal & SSH", readme)
+        self.assertIn("Advanced SSH & Web Terminal", readme)
+        self.assertNotIn("Terminal & SSH", requirements)
+        self.assertNotIn("Advanced SSH & Web Terminal", requirements)
+        self.assertNotIn("Terminal & SSH", installer)
+        self.assertNotIn("Advanced SSH & Web Terminal", installer)
 
     def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

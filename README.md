@@ -38,7 +38,7 @@ The setup requires access to:
 
 1. The router's device list, to identify the charger and Home Assistant LAN addresses.
 2. Home Assistant's Advanced SSH & Web Terminal app, to run the installer command.
-3. OCPPSetTool, to enter the values printed by the installer.
+3. [OCPPSetTool for Android](https://play.google.com/store/apps/details?id=com.evsemaster.ocppset) or [OCPPSetTool for iPhone](https://apps.apple.com/au/app/ocppsettool/id6504644430), to enter the values printed by the installer.
 
 The installer does not require Python, Docker or Home Assistant internal-storage edits. Changing the physical charger's endpoint remains a separate OCPPSetTool step and cannot be automated by a Home Assistant app.
 
@@ -117,9 +117,33 @@ Save the server and charger ID before setting Online mode.
 
 Some Ocular firmware requires the server field without `ws://`. The example above intentionally omits it.
 
-![OCPPSetTool field reference](docs/images/ocular-settings-reference.svg)
+#### Actual OCPPSetTool screens
 
-The image is a labelled reference diagram rather than a screenshot. OCPPSetTool screens vary between app and firmware versions. Follow the field names and use the exact values printed by the installer.
+These are genuine OCPPSetTool interface captures reproduced from Ocular's official [LTE Plus v3 OCPP configuration guide](https://evse.com.au/wp-content/uploads/LTE-Plus-v3-OCPP-configuration-guide.pdf), not recreated mock-ups.
+
+> **Do not copy the charger ID or Exploren server shown in the first screenshot.** They are Ocular's example values. Enter the exact charger ID and server printed by this installer's output.
+
+**1. Main screen — set Charger ID, select `WS`, enter Server, and tap each blue tick to save**
+
+<img src="docs/images/ocppsettool-main-official.png" alt="Actual OCPPSetTool main screen showing Charger ID, WS or WSS selection, server URL and save tick buttons" width="360">
+
+**2. Open `Other Settings`**
+
+<img src="docs/images/ocppsettool-other-settings-official.png" alt="Actual OCPPSetTool Other Settings screen with Set IP and Set Mode controls" width="360">
+
+**3. Open `Set IP`, select `DHCP IP`, then tap `Set`**
+
+<img src="docs/images/ocppsettool-set-ip-official.png" alt="Actual OCPPSetTool Set IP screen with Static IP and DHCP IP choices" width="360">
+
+**4. Open `Set Mode`, select `Online`, then tap `Set`**
+
+<img src="docs/images/ocppsettool-set-mode-official.png" alt="Actual OCPPSetTool Set Mode screen with Online and Offline choices" width="360">
+
+The screen layout may differ slightly between Android, iPhone and app versions. The controls and field names above are the ones used by the Ocular LTE Plus v3 guide.
+
+For a compact value-only view, use this labelled reference:
+
+![OCPPSetTool field reference](docs/images/ocular-settings-reference.svg)
 
 ## Check that it connected
 

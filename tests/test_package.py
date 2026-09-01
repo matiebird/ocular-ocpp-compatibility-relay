@@ -47,16 +47,21 @@ class PackageTests(unittest.TestCase):
         self.assertIn("transaction ID 0", guide)
         self.assertNotIn("192.168.0.", guide)
 
-    def test_beginner_diagrams_are_linked_and_present(self):
+    def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for relative_path in (
             "docs/images/connection-overview.svg",
             "docs/images/ocular-settings-reference.svg",
+            "docs/images/ocppsettool-main-official.png",
+            "docs/images/ocppsettool-other-settings-official.png",
+            "docs/images/ocppsettool-set-ip-official.png",
+            "docs/images/ocppsettool-set-mode-official.png",
         ):
             self.assertIn(relative_path, readme)
             self.assertTrue((ROOT / relative_path).is_file())
         self.assertIn("Current charger OCPP server", readme)
-        self.assertIn("labelled reference diagram rather than a screenshot", readme)
+        self.assertIn("genuine OCPPSetTool interface captures", readme)
+        self.assertIn("Do not copy the charger ID or Exploren server", readme)
         self.assertIn("## Installation prerequisites", readme)
         self.assertNotIn("without being a developer", readme)
         self.assertNotRegex(readme, r"(?m)^bash install\.sh ")

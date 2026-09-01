@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+- Add genuine OCPPSetTool interface captures from Ocular's official LTE Plus v3 guide.
+- Show the main Charger ID/server controls, Other Settings, DHCP selection and Online mode.
+- Link directly to the official Android and iPhone OCPPSetTool listings.
+
 ## 0.3.4
 
 - Document transaction-preserving 0 A hold and same-transaction resume.

@@ -32,6 +32,28 @@ Supported Home Assistant host architectures:
 - aarch64
 - amd64
 
+## Installation prerequisites
+
+The setup requires access to:
+
+1. The router's device list, to identify the charger and Home Assistant LAN addresses.
+2. Home Assistant's Advanced SSH & Web Terminal app, to run the installer command.
+3. OCPPSetTool, to enter the values printed by the installer.
+
+The installer does not require Python, Docker or Home Assistant internal-storage edits. Changing the physical charger's endpoint remains a separate OCPPSetTool step and cannot be automated by a Home Assistant app.
+
+![Connection overview](docs/images/connection-overview.svg)
+
+Before starting, write down:
+
+```text
+Charger IP:       ____________________
+Home Assistant IP: ____________________
+Current charger OCPP server: ______________________________
+```
+
+Keep the current OCPP server value so you can restore it if needed.
+
 ## Install
 
 ### 1. Copy and extract the ZIP
@@ -53,7 +75,7 @@ bash /config/ocular-ocpp-easy-deploy/install.sh CHARGER_IP HOME_ASSISTANT_IP
 Example:
 
 ```bash
-bash install.sh 192.168.1.50 192.168.1.10
+bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10
 ```
 
 The defaults are:
@@ -68,13 +90,13 @@ Expected path: /central/central
 If your charger ID or Home Assistant OCPP port is different:
 
 ```bash
-bash install.sh CHARGER_IP HOME_ASSISTANT_IP CHARGE_POINT_ID HA_OCPP_PORT
+bash /config/ocular-ocpp-easy-deploy/install.sh CHARGER_IP HOME_ASSISTANT_IP CHARGE_POINT_ID HA_OCPP_PORT
 ```
 
 Example:
 
 ```bash
-bash install.sh 192.168.1.50 192.168.1.10 driveway 9000
+bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10 driveway 9000
 ```
 
 The installer checks the IP addresses and existing OCPP listener, backs up an older relay outside Supervisor's `/addons` scan tree, installs the local app, verifies that it is started and listening, and prints the exact charger settings. If a reinstall fails after removing the previous version, it automatically attempts to restore and restart that version.
@@ -95,6 +117,10 @@ Save the server and charger ID before setting Online mode.
 
 Some Ocular firmware requires the server field without `ws://`. The example above intentionally omits it.
 
+![OCPPSetTool field reference](docs/images/ocular-settings-reference.svg)
+
+The image is a labelled reference diagram rather than a screenshot. OCPPSetTool screens vary between app and firmware versions. Follow the field names and use the exact values printed by the installer.
+
 ## Check that it connected
 
 Run:
@@ -110,6 +136,14 @@ connection_open
 ```
 
 Home Assistant should then receive a fresh BootNotification and heartbeat. The connector should become `Available` or `Preparing`, with `NoError`.
+
+If you do not see `connection_open`, do not keep changing settings at random. Check that:
+
+- the charger address entered in the installer matches the charger in your router;
+- the Home Assistant address entered in OCPPSetTool is correct;
+- the server uses port `19000` and has no `ws://` prefix;
+- the charger ID and path match the values printed by the installer;
+- the compatibility relay app is started.
 
 Do not treat one successful command after reboot as proof. Leave it connected for a few minutes and try `ocpp.get_configuration` more than once before relying on it.
 
@@ -130,6 +164,18 @@ ocpp_device_id: ocular
 ```
 
 Run the script only after the charger is connected. Read the values back again after a Soft Reset or power cycle because this firmware may reset `HeartbeatInterval` to `3600`.
+
+## Charger control workarounds
+
+The connection relay is only one part of a reliable installation. See [Ocular charger control workarounds](CHARGER_CONTROL_WORKAROUNDS.md) for the field-tested transaction and recovery rules:
+
+- transaction-preserving 0 A hold and same-transaction resume;
+- safe handling of delayed OCPP replies and ambiguous timeouts;
+- sustained terminal-taper completion;
+- explicit Hard Reset for exceptional command-unresponsive recovery;
+- one serialized normal command authority.
+
+The guide includes the tested OCPP profile shape and verification boundaries. The relay itself does not send charging or reset commands.
 
 ## Test charging
 
@@ -166,9 +212,9 @@ The uninstaller removes only this relay. It does not edit Home Assistant's OCPP 
 
 This is a compatibility workaround, not an Ocular firmware update.
 
-It can give the charger a WebSocket connection it handles more reliably and allow automatic recovery from brief reconnects. It cannot repair a charger connection attempt that never sends a complete opening request, and it cannot fix firmware that sends heartbeats but later ignores OCPP commands.
+It can give the charger a WebSocket connection it handles more reliably and allow automatic recovery from brief reconnects. It cannot repair a charger connection attempt that never sends enough of an opening request to classify safely, and it cannot fix firmware that sends heartbeats but later ignores OCPP commands.
 
-If the OCPP channel is dead, an OCPP Reset command cannot travel over that dead channel. If one Soft Reset does not recover it, switch off only the dedicated EVSE isolator for 30 seconds. After power returns, wait for BootNotification, heartbeat, a usable connector state and `NoError` before charging.
+If the OCPP channel is alive but the charger is genuinely command-unresponsive, the tested firmware responded more reliably to an explicit Hard Reset than Soft Reset. Do not reset it merely for `Finishing`, `SuspendedEV`, `SuspendedEVSE`, zero current or one delayed response. If the OCPP channel is dead, no OCPP Reset command can travel over it; follow the charger's electrical safety and dedicated isolation procedure. After recovery, require BootNotification, heartbeat, a usable connector state and `NoError` before charging.
 
 ## Security boundary
 

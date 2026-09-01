@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">Ocular OCPP compatibility relay connection overview</title>
+  <desc id="desc">The Ocular charger connects to Home Assistant port 19000. The compatibility relay opens a second connection to the existing Home Assistant OCPP integration on port 9000.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/></marker>
+    <style>
+      .bg{fill:#f8fafc}.box{fill:#fff;stroke:#334155;stroke-width:3}.relay{fill:#eff6ff;stroke:#2563eb}.ha{fill:#ecfdf5;stroke:#059669}.title{font:700 28px Arial,sans-serif;fill:#0f172a}.label{font:700 23px Arial,sans-serif;fill:#0f172a}.small{font:18px Arial,sans-serif;fill:#334155}.port{font:700 18px monospace;fill:#1d4ed8}.arrow{stroke:#2563eb;stroke-width:4;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="430"/>
+  <text x="600" y="50" text-anchor="middle" class="title">How the compatibility relay connects</text>
+  <rect x="55" y="120" width="280" height="170" rx="18" class="box"/>
+  <text x="195" y="180" text-anchor="middle" class="label">Ocular charger</text>
+  <text x="195" y="220" text-anchor="middle" class="small">OCPP 1.6J over WS</text>
+  <text x="195" y="255" text-anchor="middle" class="small">Reserved LAN address</text>
+  <line x1="335" y1="205" x2="445" y2="205" class="arrow"/>
+  <text x="390" y="185" text-anchor="middle" class="port">:19000</text>
+  <rect x="455" y="105" width="290" height="200" rx="18" class="box relay"/>
+  <text x="600" y="165" text-anchor="middle" class="label">Compatibility relay</text>
+  <text x="600" y="205" text-anchor="middle" class="small">Home Assistant local app</text>
+  <text x="600" y="240" text-anchor="middle" class="small">Terminates both WebSockets</text>
+  <text x="600" y="275" text-anchor="middle" class="small">Does not change OCPP messages</text>
+  <line x1="745" y1="205" x2="855" y2="205" class="arrow"/>
+  <text x="800" y="185" text-anchor="middle" class="port">:9000</text>
+  <rect x="865" y="120" width="280" height="170" rx="18" class="box ha"/>
+  <text x="1005" y="180" text-anchor="middle" class="label">HA OCPP integration</text>
+  <text x="1005" y="220" text-anchor="middle" class="small">Existing listener unchanged</text>
+  <text x="1005" y="255" text-anchor="middle" class="small">Entities and controls stay in HA</text>
+  <text x="600" y="365" text-anchor="middle" class="small">Default path: /central/central · Subprotocol: ocpp1.6</text>
+  <text x="600" y="400" text-anchor="middle" class="small">Your ports and charger ID may differ. The installer prints the exact values to enter.</text>
+</svg>

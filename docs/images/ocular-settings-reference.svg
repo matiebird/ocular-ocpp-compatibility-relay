@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="700" viewBox="0 0 1100 700" role="img" aria-labelledby="title desc">
+  <title id="title">Ocular OCPPSetTool settings reference</title>
+  <desc id="desc">A labelled reference diagram showing Protocol WS, Server Home Assistant IP port 19000 slash central, Charger ID central, blank authentication and Online mode.</desc>
+  <style>
+    .bg{fill:#f8fafc}.panel{fill:#fff;stroke:#334155;stroke-width:3}.field{fill:#f1f5f9;stroke:#94a3b8;stroke-width:2}.heading{font:700 30px Arial,sans-serif;fill:#0f172a}.label{font:700 20px Arial,sans-serif;fill:#334155}.value{font:21px monospace;fill:#0f172a}.note{font:18px Arial,sans-serif;fill:#475569}.warn{fill:#fff7ed;stroke:#f97316;stroke-width:2}.button{fill:#2563eb}.buttonText{font:700 21px Arial,sans-serif;fill:#fff}
+  </style>
+  <rect class="bg" width="1100" height="700"/>
+  <text x="550" y="55" text-anchor="middle" class="heading">OCPPSetTool field reference</text>
+  <text x="550" y="88" text-anchor="middle" class="note">Reference diagram, not a screenshot. Use the values printed by your installer.</text>
+  <rect x="180" y="115" width="740" height="500" rx="20" class="panel"/>
+  <text x="230" y="165" class="label">Protocol</text>
+  <rect x="500" y="135" width="360" height="48" rx="8" class="field"/>
+  <text x="520" y="167" class="value">WS</text>
+  <text x="230" y="235" class="label">Server</text>
+  <rect x="500" y="205" width="360" height="48" rx="8" class="field"/>
+  <text x="520" y="237" class="value">HA_IP:19000/central</text>
+  <text x="230" y="305" class="label">Charger ID</text>
+  <rect x="500" y="275" width="360" height="48" rx="8" class="field"/>
+  <text x="520" y="307" class="value">central</text>
+  <text x="230" y="375" class="label">Authentication</text>
+  <rect x="500" y="345" width="360" height="48" rx="8" class="field"/>
+  <text x="520" y="377" class="value">blank</text>
+  <text x="230" y="445" class="label">Mode</text>
+  <rect x="500" y="415" width="360" height="48" rx="8" class="field"/>
+  <text x="520" y="447" class="value">Online</text>
+  <rect x="500" y="495" width="170" height="52" rx="10" class="button"/>
+  <text x="585" y="528" text-anchor="middle" class="buttonText">SAVE</text>
+  <rect x="205" y="565" width="690" height="90" rx="12" class="warn"/>
+  <text x="550" y="600" text-anchor="middle" class="note">Save Server and Charger ID before switching to Online.</text>
+  <text x="550" y="630" text-anchor="middle" class="note">Some firmware requires the Server value without ws://</text>
+  <text x="550" y="685" text-anchor="middle" class="note">HA_IP means your Home Assistant LAN address. Do not copy another user's address.</text>
+</svg>

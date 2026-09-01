@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- Document transaction-preserving 0 A hold and same-transaction resume.
+- Document delayed OCPP reply handling and sustained terminal-taper completion.
+- Document the tested Hard Reset recovery boundary for a genuinely command-unresponsive charger.
+- Clarify that the compatibility relay works around the observed connection problem but does not generate charger-control commands.
+
 ## 0.3.3
 
 - Replace the optional Buy Me a Coffee support link with Ko-fi.

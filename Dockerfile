@@ -2,13 +2,14 @@ FROM python:3.12-alpine AS test
 WORKDIR /src
 RUN pip install --no-cache-dir websockets==12.0
 COPY proxy ./proxy
+COPY docs ./docs
 COPY tests ./tests
-COPY Dockerfile config.yaml install.sh uninstall.sh ha-timing-script.yaml README.md ./
+COPY Dockerfile config.yaml install.sh uninstall.sh ha-timing-script.yaml README.md CHARGER_CONTROL_WORKAROUNDS.md ./
 RUN python -m unittest discover -s tests -v
 
 FROM python:3.12-alpine
 LABEL org.opencontainers.image.title="Ocular OCPP Compatibility Relay" \
-      org.opencontainers.image.version="0.3.3"
+      org.opencontainers.image.version="0.3.4"
 RUN pip install --no-cache-dir websockets==12.0 && \
     addgroup -S proxy && adduser -S -G proxy proxy
 WORKDIR /app

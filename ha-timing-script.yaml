@@ -49,4 +49,4 @@ sequence:
         WebSocketPingInterval: {{ websocket_readback.value | default(websocket_readback) }}
         MeterValueSampleInterval: {{ meter_readback.value | default(meter_readback) }}
 
-        Expected values: 60, 60 and 10. Run this again after a Soft Reset or power cycle.
+        Expected values: 60, 60 and 10. Run this again after any reset or power cycle.

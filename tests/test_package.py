@@ -14,13 +14,55 @@ class PackageTests(unittest.TestCase):
 
     def test_docker_build_includes_files_used_by_package_tests(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        for name in ("install.sh", "uninstall.sh", "ha-timing-script.yaml", "README.md"):
+        for name in (
+            "install.sh",
+            "uninstall.sh",
+            "ha-timing-script.yaml",
+            "README.md",
+            "CHARGER_CONTROL_WORKAROUNDS.md",
+        ):
             self.assertIn(name, dockerfile)
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('"$SOURCE_DIR/install.sh"', installer)
         self.assertIn('"$SOURCE_DIR/uninstall.sh"', installer)
         self.assertIn('"$SOURCE_DIR/ha-timing-script.yaml"', installer)
         self.assertIn('"$SOURCE_DIR/README.md"', installer)
+        self.assertIn('"$SOURCE_DIR/CHARGER_CONTROL_WORKAROUNDS.md"', installer)
+        self.assertIn('"$SOURCE_DIR/docs"', installer)
+
+    def test_community_control_workarounds_are_packaged(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide = (ROOT / "CHARGER_CONTROL_WORKAROUNDS.md").read_text(encoding="utf-8")
+        self.assertIn("CHARGER_CONTROL_WORKAROUNDS.md", readme)
+        self.assertIn('"chargingProfilePurpose": "TxProfile"', guide)
+        self.assertIn('"limit": 0', guide)
+        self.assertIn("same transaction", guide)
+        self.assertIn("above 1 A and at or below 3 A for 15 minutes", guide)
+        self.assertIn("Hard Reset", guide)
+        self.assertIn("BootNotification", guide)
+        self.assertIn("one serialized coordinator", guide)
+        self.assertIn("lowest commissioned limit", guide)
+        self.assertIn("command-quiescence period", guide)
+        self.assertIn("terminal-taper candidate", guide)
+        self.assertIn("transaction ID 0", guide)
+        self.assertNotIn("192.168.0.", guide)
+
+    def test_beginner_diagrams_are_linked_and_present(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for relative_path in (
+            "docs/images/connection-overview.svg",
+            "docs/images/ocular-settings-reference.svg",
+        ):
+            self.assertIn(relative_path, readme)
+            self.assertTrue((ROOT / relative_path).is_file())
+        self.assertIn("Current charger OCPP server", readme)
+        self.assertIn("labelled reference diagram rather than a screenshot", readme)
+        self.assertIn("## Installation prerequisites", readme)
+        self.assertNotIn("without being a developer", readme)
+        self.assertNotRegex(readme, r"(?m)^bash install\.sh ")
+        self.assertGreaterEqual(
+            readme.count("bash /config/ocular-ocpp-easy-deploy/install.sh"), 3
+        )
 
     def test_experimental_version_is_bumped_consistently(self):
         config = (ROOT / "config.yaml").read_text(encoding="utf-8")

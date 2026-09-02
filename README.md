@@ -173,7 +173,9 @@ If you do not see `connection_open`, do not keep changing settings at random. Ch
 
 Do not treat one successful command after reboot as proof. Leave it connected for a few minutes and try `ocpp.get_configuration` more than once before relying on it.
 
-## Recommended charger timing
+## Required manual post-install charger timing
+
+For the tested Ocular LTE Plus V3 firmware, this is a required manual post-install step. Apply it after the charger has connected. The relay terminates WebSocket control pings locally, so they do not become OCPP application traffic between the charger and Home Assistant.
 
 The supplied `ha-timing-script.yaml` sets and reads back:
 
@@ -183,13 +185,23 @@ WebSocketPingInterval = 60
 MeterValueSampleInterval = 10
 ```
 
+`HeartbeatInterval` is connection-critical because it creates regular OCPP
+request/response traffic. `WebSocketPingInterval` controls charger-generated
+WebSocket keepalive traffic, which the relay answers locally.
+`MeterValueSampleInterval` is the telemetry frequency; it is useful for current
+and power updates but is not the setting that prevents an otherwise idle OCPP
+session.
+
 Paste it into a Home Assistant script. Change this line if your OCPP device ID is not `ocular`:
 
 ```yaml
 ocpp_device_id: ocular
 ```
 
-Run the script only after the charger is connected. Read the values back again after a Soft Reset or power cycle because this firmware may reset `HeartbeatInterval` to `3600`.
+Run the script only after the charger is connected. Its final notification must
+read back `60`, `60` and `10`; applying the service calls without this readback
+is not verification. Run it again after a Soft Reset or power cycle because the
+tested firmware may reset `HeartbeatInterval` to `3600`.
 
 ## Everyday Home Assistant controls
 

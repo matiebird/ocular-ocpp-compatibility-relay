@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import websockets
 from websockets.exceptions import ConnectionClosedError, InvalidStatusCode
 
-from proxy.server import OcppWebSocketRelay, RelayConfig
+from proxy.server import OcppWebSocketRelay, RelayConfig, _safe_log_path
 
 
 class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -141,13 +141,116 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_oversized_message_closes_without_forwarding(self):
         relay, port = await self.start_relay(max_message_bytes=8)
-        async with self.connect(port) as charger:
-            await charger.send("ninebytes")
-            with self.assertRaises(ConnectionClosedError) as raised:
-                await charger.recv()
-            self.assertEqual(raised.exception.code, 1009)
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port) as charger:
+                await charger.send("ninebytes")
+                with self.assertRaises(ConnectionClosedError) as raised:
+                    await charger.recv()
+                self.assertEqual(raised.exception.code, 1009)
+            await asyncio.sleep(0.05)
         self.assertEqual(self.upstream_messages, [])
         self.assertEqual(relay.counters["oversized_messages"], 1)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=message_too_large", output)
+        self.assertIn("charger_code=1009", output)
+
+    async def test_rejected_path_debug_log_removes_query_secrets(self):
+        relay, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="DEBUG") as captured:
+            with self.assertRaises((InvalidStatusCode, ConnectionClosedError)):
+                async with self.connect(port, path="/wrong?token=TOP-SECRET"):
+                    pass
+        output = "\n".join(captured.output)
+        self.assertIn("path='/wrong'", output)
+        self.assertNotIn("TOP-SECRET", output)
+        self.assertNotIn("token", output)
+        self.assertEqual(relay.counters["rejected_path"], 1)
+
+    def test_safe_log_path_escapes_control_characters(self):
+        rendered = _safe_log_path("/wrong\x1b[31m\r\nnext?token=TOP-SECRET")
+        self.assertIn("\\x1b", rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\r", rendered)
+        self.assertNotIn("\n", rendered)
+        self.assertNotIn("TOP-SECRET", rendered)
+
+    async def test_connection_log_records_charger_close_cause(self):
+        _, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port) as charger:
+                await charger.send("hello")
+                await charger.recv()
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=charger_close", output)
+        self.assertIn("charger_code=1000", output)
+
+    async def test_connection_log_records_upstream_normal_close_cause(self):
+        _, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port) as charger:
+                while not self.upstream_connections:
+                    await asyncio.sleep(0)
+                await self.upstream_connections[0].close(code=1000, reason="done")
+                with self.assertRaises(websockets.ConnectionClosed) as raised:
+                    await charger.recv()
+                self.assertEqual(raised.exception.code, 1001)
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=upstream_close", output)
+        self.assertIn("upstream_code=1000", output)
+
+    async def test_connection_log_records_upstream_failure_cause(self):
+        _, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port) as charger:
+                while not self.upstream_connections:
+                    await asyncio.sleep(0)
+                await self.upstream_connections[0].close(code=1011, reason="failed")
+                with self.assertRaises(ConnectionClosedError) as raised:
+                    await charger.recv()
+                self.assertEqual(raised.exception.code, 1011)
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=upstream_failure", output)
+        self.assertIn("upstream_code=1011", output)
+
+    async def test_connection_log_records_relay_shutdown_cause(self):
+        relay, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            charger = await self.connect(port)
+            self.addAsyncCleanup(charger.close)
+            while not self.upstream_connections:
+                await asyncio.sleep(0)
+            await relay.stop()
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=relay_shutdown", output)
+        self.assertIn("charger_code=1001", output)
+
+    async def test_connection_log_records_initial_upstream_failure(self):
+        probe = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+        dead_port = probe.sockets[0].getsockname()[1]
+        probe.close()
+        await probe.wait_closed()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            _, port = await self.start_relay(
+                upstream_base=f"ws://127.0.0.1:{dead_port}"
+            )
+            async with self.connect(port) as charger:
+                with self.assertRaises(ConnectionClosedError):
+                    await charger.recv()
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("cause=upstream_failure", output)
+        self.assertIn("upstream_code=None", output)
 
     async def test_logs_do_not_contain_raw_credentials_or_frames(self):
         relay, port = await self.start_relay()

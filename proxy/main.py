@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import pwd
+import signal
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 MAX_ALLOWLIST_ENTRIES = 16
 MAX_EXPECTED_PATHS = 8
 MAX_PATH_LENGTH = 256
+SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 def _validate_path(value: Any, name: str) -> str:
@@ -30,7 +32,9 @@ def _validate_path(value: Any, name: str) -> str:
         or urlsplit(value).fragment
     ):
         raise ValueError(f"{name} is invalid or too long")
-    if value.endswith("/") or "//" in value or "/../" in value:
+    if value.endswith("/") or any(
+        segment in ("", ".", "..") for segment in value[1:].split("/")
+    ):
         raise ValueError(f"{name} must be canonical")
     return value
 
@@ -136,6 +140,12 @@ def _configure_logging(level_name: str) -> None:
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
+def _request_stop(stop_event: asyncio.Event, signum: int) -> None:
+    if not stop_event.is_set():
+        LOGGER.info("shutdown_requested signal=%s", signal.Signals(signum).name)
+    stop_event.set()
+
+
 def _timing_callback(config: RelayConfig, environment: Mapping[str, str]):
     token = environment.get("SUPERVISOR_TOKEN", "")
     if not token:
@@ -160,7 +170,11 @@ async def run(options_path: Path) -> None:
     timing_callback = _timing_callback(config, os.environ)
     _drop_privileges()
     relay = OcppWebSocketRelay(config, on_upstream_connected=timing_callback)
-    server = await relay.start()
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in SHUTDOWN_SIGNALS:
+        loop.add_signal_handler(signum, _request_stop, stop_event, signum)
+    await relay.start()
     LOGGER.info(
         "listening port=%d sources=%d paths=%d upstream=%s uid=%d",
         config.listen_port,
@@ -171,19 +185,55 @@ async def run(options_path: Path) -> None:
     )
     metrics_task = asyncio.create_task(_report_metrics(relay))
     try:
-        async with server:
-            await server.serve_forever()
+        await stop_event.wait()
     finally:
         metrics_task.cancel()
         await asyncio.gather(metrics_task, return_exceptions=True)
         await relay.stop()
+        for signum in SHUTDOWN_SIGNALS:
+            loop.remove_signal_handler(signum)
+        LOGGER.info("stopped")
+
+
+def _run_event_loop(coroutine, *, cleanup_timeout: float = 0.5):
+    """Run the relay without allowing a cancellation-resistant task to block exit."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            done, pending = loop.run_until_complete(
+                asyncio.wait(pending, timeout=cleanup_timeout)
+            )
+            for task in done:
+                if not task.cancelled():
+                    error = task.exception()
+                    if error is not None:
+                        LOGGER.error(
+                            "shutdown_task_failed error_type=%s",
+                            type(error).__name__,
+                        )
+        if pending:
+            LOGGER.error("shutdown_abandoned tasks=%d", len(pending))
+            # asyncio.run() waits forever for cancellation-resistant tasks.
+            # The relay has already exhausted its bounded teardown; close the
+            # private process loop rather than outliving Supervisor's deadline.
+            for task in pending:
+                if hasattr(task, "_log_destroy_pending"):
+                    task._log_destroy_pending = False
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--options", type=Path, default=Path("/data/options.json"))
     args = parser.parse_args()
-    asyncio.run(run(args.options))
+    _run_event_loop(run(args.options))
 
 
 if __name__ == "__main__":

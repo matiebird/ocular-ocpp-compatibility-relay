@@ -199,7 +199,7 @@ The relay addresses Home Assistant OCPP with the configured charger ID. The inte
 
 Successful application is recorded in the app log as `timing_verified` with readback values `60`, `60` and `10`. The relay retries transient failures for up to several minutes without interrupting charging. It runs the process again after every reconnect because the tested firmware may reset `HeartbeatInterval` to `3600` after a Soft Reset or power cycle.
 
-The supplied `ha-timing-script.yaml` remains available as a manual fallback if automatic verification reports `timing_verification_failed`. If Home Assistant API access is unavailable, the app logs `timing_disabled` but keeps relaying charger traffic.
+The supplied `ha-timing-script.yaml` remains available as a manual fallback if automatic verification reports `timing_verification_failed`. The installed copy already carries the charge-point ID you gave the installer, so it works with any charger ID without editing. If Home Assistant API access is unavailable, the app logs `timing_disabled` but keeps relaying charger traffic.
 
 ## Everyday Home Assistant controls
 

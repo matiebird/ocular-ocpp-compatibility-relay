@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.12
+
+- Stop cleanly on SIGTERM/SIGINT so app stop and restart close charger sessions with a WebSocket close frame instead of waiting for the container kill timeout, and log `relay_shutdown` for those closures.
+- Use the Supervisor default init so container signals reach the relay process.
+- Bound shutdown well inside Supervisor's ten-second kill timeout: one shared teardown with a five-second aggregate deadline, two-second close handshakes, a three-second graceful window, immediate cancellation of a session still inside a stalled upstream handshake, and timing HTTP calls on a daemon thread that can never hold the process open.
+- Track and observe the WebSocket server's close task on every teardown path, including `wait_closed()` failures; after the bounded cleanup deadline, the process event loop no longer waits indefinitely for a cancellation-resistant residual task.
+- Attribute a charger dropping mid-forward to `charger_close` rather than `upstream_failure` in connection diagnostics.
+- Reject `.` and `..` path segments in `expected_paths` and `upstream_path`.
+- Fill the chosen charge-point ID into the installed fallback timing script and example package, and default both to `central` like the app, so custom charger IDs work end to end.
+- Write every installer-generated charger ID and path as a quoted YAML string, so IDs such as `123`, `true`, `null` or `2026-01-01` are never retyped, and reject `.` and `..` before installation. Tests now run the real installer substitutions and parse the results.
+- Keep the strict single-charger boundary: one pinned charger IP, one pinned charger path and one pinned OCPP identity, exactly as in 0.3.9 and 0.3.11.
+
 ## 0.3.11
 
 - Withdraw the unsafe 0.3.10 auto-identity, CIDR and multi-charger expansion.

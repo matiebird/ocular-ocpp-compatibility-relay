@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import unittest
 from http.client import RemoteDisconnected
 from io import BytesIO
@@ -160,6 +161,33 @@ class TimingControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(sleeps, [5, 10])
         self.assertEqual(result["HeartbeatInterval"], "60")
+
+    async def test_cancellation_abandons_a_hung_home_assistant_call(self):
+        started = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        worker = {}
+
+        class Client:
+            def apply_and_verify(self):
+                worker["thread"] = threading.current_thread()
+                started.set()
+                release.wait()
+                return {}
+
+        controller = TimingController(
+            Client(), initial_delay=0, retry_delays=(), sleep=asyncio.sleep
+        )
+        task = asyncio.create_task(controller.apply_after_connection())
+        await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        self.assertTrue(worker["thread"].daemon)
+        self.assertTrue(worker["thread"].is_alive())
+        release.set()
+        worker["thread"].join(5)
+        self.assertFalse(worker["thread"].is_alive())
 
     async def test_stops_after_bounded_retries(self):
         class Client:

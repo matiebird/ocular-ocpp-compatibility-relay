@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import Awaitable, Callable, Sequence
 from http.client import HTTPException
 from typing import Any
@@ -105,6 +106,39 @@ class HomeAssistantTimingClient:
             ) from exc
 
 
+async def _run_in_daemon_thread(function: Callable[[], Any]) -> Any:
+    """Run a blocking call on a daemon thread so it never delays process exit.
+
+    asyncio.to_thread uses the default executor, whose threads are joined when
+    the event loop and the interpreter shut down. A Home Assistant request that
+    is hanging in urlopen would then hold the container past Supervisor's kill
+    timeout. A daemon thread is simply abandoned once the task is cancelled.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[Any] = loop.create_future()
+
+    def deliver(result: Any, error: BaseException | None) -> None:
+        if future.done():
+            return
+        if error is None:
+            future.set_result(result)
+        else:
+            future.set_exception(error)
+
+    def worker() -> None:
+        try:
+            outcome = (function(), None)
+        except BaseException as exc:  # delivered to the awaiting task
+            outcome = (None, exc)
+        try:
+            loop.call_soon_threadsafe(deliver, *outcome)
+        except RuntimeError:
+            pass  # the loop already closed during shutdown
+
+    threading.Thread(target=worker, name="ocular-timing", daemon=True).start()
+    return await future
+
+
 class TimingController:
     def __init__(
         self,
@@ -126,7 +160,9 @@ class TimingController:
             delays = (*self.retry_delays, None)
             for attempt, retry_delay in enumerate(delays, start=1):
                 try:
-                    readback = await asyncio.to_thread(self.client.apply_and_verify)
+                    readback = await _run_in_daemon_thread(
+                        self.client.apply_and_verify
+                    )
                     LOGGER.info(
                         "timing_verified heartbeat=%s websocket_ping=%s meter_sample=%s",
                         readback["HeartbeatInterval"],

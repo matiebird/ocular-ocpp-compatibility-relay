@@ -183,5 +183,10 @@ Verify after the charger connects:
   ha apps logs $SLUG
 
 Look for "connection_open" without a repeating "upstream_failure".
+
+Then apply the required charger timing. Paste ha-timing-script.yaml into a
+Home Assistant script and run it once. Without it the charger sits on the
+firmware default of one heartbeat per hour, sees no traffic between OCPP
+messages and closes the connection after a few minutes.
 Any previous source backup is outside /addons at $BACKUP_ROOT so Supervisor cannot mistake it for another local app.
 EOF

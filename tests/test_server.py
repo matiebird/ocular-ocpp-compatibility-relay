@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -528,6 +529,70 @@ class TeardownTests(unittest.IsolatedAsyncioTestCase):
         ):
             await relay.start()
         return relay
+
+    async def test_failed_wait_closed_still_tracks_the_server_close_task(self):
+        release = asyncio.Event()
+
+        class BrokenWaitServer(FakeServer):
+            def close(self):
+                async def cancellation_resistant_close():
+                    while not release.is_set():
+                        try:
+                            await release.wait()
+                        except asyncio.CancelledError:
+                            continue
+
+                self.close_task = asyncio.create_task(cancellation_resistant_close())
+
+        fake_server = BrokenWaitServer(wait_closed_error=RuntimeError("boom"))
+        relay = await self.start_with(fake_server)
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        try:
+            with (
+                patch("proxy.server.STOP_TIMEOUT_SECONDS", 0.2),
+                patch("proxy.server.FORCED_STOP_GRACE_SECONDS", 0.1),
+                self.assertLogs(logger, level="ERROR") as captured,
+            ):
+                await relay.stop()
+            output = "\n".join(captured.output)
+            self.assertIn("stop_error error_type=RuntimeError", output)
+            self.assertIn("stop_abandoned tasks=1", output)
+            self.assertFalse(fake_server.close_task.done())
+        finally:
+            release.set()
+            await fake_server.close_task
+
+    async def test_close_task_failure_during_settle_is_observed(self):
+        release = asyncio.Event()
+
+        class LateFailServer(FakeServer):
+            def close(self):
+                async def fail_after_collection():
+                    await release.wait()
+                    raise LookupError("late close failure")
+
+                self.close_task = asyncio.create_task(fail_after_collection())
+
+        fake_server = LateFailServer(wait_closed_error=RuntimeError("wait failed"))
+        relay = await self.start_with(fake_server)
+        loop = asyncio.get_running_loop()
+        unhandled = []
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        try:
+            loop.call_later(0.01, release.set)
+            with self.assertLogs(
+                logging.getLogger("ocular_ocpp_websocket_proxy"), level="ERROR"
+            ) as captured:
+                await relay.stop()
+            self.assertTrue(fake_server.close_task.done())
+            fake_server.close_task = None
+            gc.collect()
+            await asyncio.sleep(0)
+            self.assertEqual(unhandled, [])
+            self.assertIn("stop_task_failed error_type=LookupError", "\n".join(captured.output))
+        finally:
+            loop.set_exception_handler(previous_handler)
 
     async def test_timing_task_is_cancelled_even_if_server_close_fails(self):
         timing_started = asyncio.Event()

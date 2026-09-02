@@ -173,26 +173,38 @@ class OcppWebSocketRelay:
         done, _ = await asyncio.wait(
             {closed}, timeout=min(GRACEFUL_STOP_SECONDS, _remaining(deadline))
         )
+        residual: set[asyncio.Task] = {abort}
         if closed in done:
             error = closed.exception()
             if error is not None:
                 LOGGER.error("stop_error error_type=%s", type(error).__name__)
-            return {abort}
-        closed.cancel()
-        residual = {
-            websocket.handler_task
-            for websocket in server.websockets
-            if not websocket.handler_task.done()
-        }
-        LOGGER.warning("stop_timeout sessions=%d", len(residual))
-        for task in residual:
-            task.cancel()
-        residual.update({closed, abort})
-        close_task = getattr(server, "close_task", None)
-        if close_task is not None and not close_task.done():
-            # Finishes once the cancelled handlers do; cancelled at the deadline.
-            residual.add(close_task)
+        else:
+            closed.cancel()
+            handlers = {
+                websocket.handler_task
+                for websocket in server.websockets
+                if not websocket.handler_task.done()
+            }
+            LOGGER.warning("stop_timeout sessions=%d", len(handlers))
+            for task in handlers:
+                task.cancel()
+            residual.update(handlers)
+            residual.add(closed)
+        self._collect_close_task(server, residual)
         return residual
+
+    @staticmethod
+    def _collect_close_task(server, residual: set[asyncio.Task]) -> None:
+        """Track a server-owned close task and consume a completed failure."""
+        close_task = getattr(server, "close_task", None)
+        if close_task is None or close_task.cancelled():
+            return
+        if not close_task.done():
+            residual.add(close_task)
+            return
+        error = close_task.exception()
+        if error is not None:
+            LOGGER.error("stop_error error_type=%s", type(error).__name__)
 
     async def _abort_connecting(self) -> None:
         async def abort(handler: asyncio.Task, charger) -> None:
@@ -207,17 +219,39 @@ class OcppWebSocketRelay:
         )
 
     @staticmethod
+    def _observe_stop_task(task: asyncio.Task) -> None:
+        """Consume and log a task failure so asyncio never reports it as unhandled."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            LOGGER.error("stop_task_failed error_type=%s", type(error).__name__)
+
+    @staticmethod
     async def _settle(tasks: set[asyncio.Task], deadline: float) -> None:
         pending = {task for task in tasks if not task.done()}
+        completed = tasks - pending
+        for task in completed:
+            OcppWebSocketRelay._observe_stop_task(task)
         if pending:
-            _, pending = await asyncio.wait(pending, timeout=_remaining(deadline))
+            completed, pending = await asyncio.wait(
+                pending, timeout=_remaining(deadline)
+            )
+            for task in completed:
+                OcppWebSocketRelay._observe_stop_task(task)
         if pending:
             for task in pending:
                 task.cancel()
-            _, pending = await asyncio.wait(
+            completed, pending = await asyncio.wait(
                 pending, timeout=_remaining(deadline, FORCED_STOP_GRACE_SECONDS)
             )
+            for task in completed:
+                OcppWebSocketRelay._observe_stop_task(task)
         if pending:
+            # If an abandoned task later finishes before process exit, consume
+            # its exception in the event-loop callback.
+            for task in pending:
+                task.add_done_callback(OcppWebSocketRelay._observe_stop_task)
             LOGGER.error("stop_abandoned tasks=%d", len(pending))
 
     def _start_timing(self) -> None:

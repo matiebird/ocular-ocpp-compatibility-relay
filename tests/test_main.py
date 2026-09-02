@@ -3,7 +3,10 @@ import json
 import logging
 import os
 import signal
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -120,6 +123,40 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("shutdown_requested signal=SIGTERM", output)
         self.assertIn("stopped", output)
         self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)
+
+
+class ProcessShutdownTests(unittest.TestCase):
+    def test_event_loop_runner_does_not_wait_forever_for_a_resistant_task(self):
+        program = textwrap.dedent(
+            """
+            import asyncio
+            from proxy.main import _run_event_loop
+
+            async def scenario():
+                async def cancellation_resistant_task():
+                    while True:
+                        try:
+                            await asyncio.sleep(3600)
+                        except asyncio.CancelledError:
+                            continue
+
+                asyncio.create_task(cancellation_resistant_task())
+                await asyncio.sleep(0)
+
+            _run_event_loop(scenario(), cleanup_timeout=0.05)
+            print("bounded-exit")
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", program],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("bounded-exit", completed.stdout)
 
 
 if __name__ == "__main__":

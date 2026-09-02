@@ -195,11 +195,45 @@ async def run(options_path: Path) -> None:
         LOGGER.info("stopped")
 
 
+def _run_event_loop(coroutine, *, cleanup_timeout: float = 0.5):
+    """Run the relay without allowing a cancellation-resistant task to block exit."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            done, pending = loop.run_until_complete(
+                asyncio.wait(pending, timeout=cleanup_timeout)
+            )
+            for task in done:
+                if not task.cancelled():
+                    error = task.exception()
+                    if error is not None:
+                        LOGGER.error(
+                            "shutdown_task_failed error_type=%s",
+                            type(error).__name__,
+                        )
+        if pending:
+            LOGGER.error("shutdown_abandoned tasks=%d", len(pending))
+            # asyncio.run() waits forever for cancellation-resistant tasks.
+            # The relay has already exhausted its bounded teardown; close the
+            # private process loop rather than outliving Supervisor's deadline.
+            for task in pending:
+                if hasattr(task, "_log_destroy_pending"):
+                    task._log_destroy_pending = False
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--options", type=Path, default=Path("/data/options.json"))
     args = parser.parse_args()
-    asyncio.run(run(args.options))
+    _run_event_loop(run(args.options))
 
 
 if __name__ == "__main__":

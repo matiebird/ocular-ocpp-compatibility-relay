@@ -15,6 +15,10 @@ from websockets.legacy.server import WebSocketServerProtocol
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 OCPP_SUBPROTOCOL = "ocpp1.6"
 OPEN_TIMEOUT_SECONDS = 10
+# Supervisor kills the container 10 s after "ha apps stop"; the close handshake
+# per session and the whole stop() must finish well inside that.
+CLOSE_TIMEOUT_SECONDS = 2
+STOP_TIMEOUT_SECONDS = 5
 HANDSHAKE_READ_LIMIT = 16_384
 LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
@@ -116,6 +120,7 @@ class OcppWebSocketRelay:
             compression=None,
             max_size=None,
             open_timeout=OPEN_TIMEOUT_SECONDS,
+            close_timeout=CLOSE_TIMEOUT_SECONDS,
             max_queue=WEBSOCKET_MAX_QUEUE,
             read_limit=HANDSHAKE_READ_LIMIT,
             write_limit=65_536,
@@ -126,9 +131,23 @@ class OcppWebSocketRelay:
         self._timing_pending = False
         if self.server is not None:
             self._stopping = True
-            self.server.close()
-            await self.server.wait_closed()
-            self.server = None
+            server, self.server = self.server, None
+            server.close()
+            try:
+                await asyncio.wait_for(server.wait_closed(), STOP_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                # A handler can still be inside a stalled upstream handshake.
+                # Cancel it rather than let Supervisor kill the whole process.
+                handlers = [
+                    websocket.handler_task
+                    for websocket in server.websockets
+                    if not websocket.handler_task.done()
+                ]
+                LOGGER.warning("stop_timeout sessions=%d", len(handlers))
+                for task in handlers:
+                    task.cancel()
+                if handlers:
+                    await asyncio.wait(handlers, timeout=CLOSE_TIMEOUT_SECONDS)
         for task in self._background_tasks:
             task.cancel()
         if self._background_tasks:
@@ -179,6 +198,7 @@ class OcppWebSocketRelay:
                 compression=None,
                 max_size=None,
                 open_timeout=OPEN_TIMEOUT_SECONDS,
+                close_timeout=CLOSE_TIMEOUT_SECONDS,
                 max_queue=WEBSOCKET_MAX_QUEUE,
                 read_limit=HANDSHAKE_READ_LIMIT,
                 write_limit=65_536,
@@ -253,7 +273,9 @@ class OcppWebSocketRelay:
         if self._stopping:
             return BridgeTermination("relay_shutdown", upstream.close_code)
 
-        if upstream_to_charger in done and not charger.closed:
+        # A copy task only finishes when its source or destination session has
+        # ended, so the side that is still open tells us which peer went away.
+        if not charger.closed:
             if upstream.close_code not in (1000, 1001):
                 self.counters["upstream_failures"] += 1
                 LOGGER.error("upstream_failure error_type=ConnectionClosed")
@@ -262,11 +284,11 @@ class OcppWebSocketRelay:
             else:
                 await charger.close(code=1001, reason="upstream closed")
                 return BridgeTermination("upstream_close", upstream.close_code)
-        if charger_to_upstream in done and not upstream.closed:
+        if not upstream.closed:
             await upstream.close(code=1001, reason="charger closed")
             return BridgeTermination("charger_close", upstream.close_code)
 
-        if upstream_to_charger in done:
+        if upstream_to_charger in done and charger_to_upstream not in done:
             cause = (
                 "upstream_close"
                 if upstream.close_code in (1000, 1001)

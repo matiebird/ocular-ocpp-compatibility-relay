@@ -75,6 +75,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("ocular_pause_charging:", controls)
         self.assertIn("ocular_resume_charging:", controls)
         self.assertIn("ocular_stop_charging:", controls)
+        self.assertIn("devid: central", controls)
+        self.assertNotIn("devid: ocular", controls)
         self.assertIn("chargingProfilePurpose", controls)
         self.assertIn("TxProfile", controls)
         self.assertIn("transactionId", controls)
@@ -197,6 +199,14 @@ class PackageTests(unittest.TestCase):
         self.assertIn("ha apps install", installer)
         self.assertIn("ha apps start", installer)
         self.assertIn("HeartbeatInterval", timing)
+        self.assertIn("ocpp_device_id: central", timing)
+        self.assertNotIn("ocular", timing)
+        self.assertIn(
+            's/^  ocpp_device_id: central$/  ocpp_device_id: $CHARGE_POINT_ID/',
+            installer,
+        )
+        self.assertIn('"$TARGET_DIR/ha-timing-script.yaml"', installer)
+        self.assertIn('"$TARGET_DIR/examples/ocular-everyday-controls.yaml"', installer)
         self.assertIn("WebSocketPingInterval", timing)
         self.assertIn("MeterValueSampleInterval", timing)
         self.assertIn("uninstall.sh", guide)

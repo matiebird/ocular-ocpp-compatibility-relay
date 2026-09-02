@@ -136,6 +136,13 @@ sed -i \
   -e "s/upstream_port: 9000/upstream_port: $HA_OCPP_PORT/g" \
   "$TARGET_DIR/config.yaml"
 
+sed -i \
+  -e "s/^  ocpp_device_id: central$/  ocpp_device_id: $CHARGE_POINT_ID/" \
+  "$TARGET_DIR/ha-timing-script.yaml"
+sed -i \
+  -e "s/^\([[:space:]]*\)devid: central$/\1devid: $CHARGE_POINT_ID/" \
+  "$TARGET_DIR/examples/ocular-everyday-controls.yaml"
+
 ha store reload
 ha apps install "$SLUG"
 ha apps start "$SLUG"
@@ -189,5 +196,7 @@ Automatic charger timing:
   WebSocketPingInterval=60 and MeterValueSampleInterval=10 through Home
   Assistant OCPP, then reads all three back. Look for "timing_verified".
   OCPP device ID: $CHARGE_POINT_ID
+  The manual fallback $TARGET_DIR/ha-timing-script.yaml and the example
+  package in $TARGET_DIR/examples already use this ID.
 Any previous source backup is outside /addons at $BACKUP_ROOT so Supervisor cannot mistake it for another local app.
 EOF

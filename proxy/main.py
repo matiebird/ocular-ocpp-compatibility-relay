@@ -6,13 +6,14 @@ import ipaddress
 import json
 import logging
 import os
-from pathlib import Path
 import pwd
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from .server import OcppWebSocketRelay, RelayConfig
-
+from .timing import HomeAssistantTimingClient, TimingController
 
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 MAX_ALLOWLIST_ENTRIES = 16
@@ -23,7 +24,11 @@ MAX_PATH_LENGTH = 256
 def _validate_path(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.startswith("/"):
         raise ValueError(f"{name} must be an absolute WebSocket path")
-    if len(value) > MAX_PATH_LENGTH or urlsplit(value).query or urlsplit(value).fragment:
+    if (
+        len(value) > MAX_PATH_LENGTH
+        or urlsplit(value).query
+        or urlsplit(value).fragment
+    ):
         raise ValueError(f"{name} is invalid or too long")
     if value.endswith("/") or "//" in value or "/../" in value:
         raise ValueError(f"{name} must be canonical")
@@ -35,7 +40,9 @@ def config_from_options(options: dict[str, Any]) -> RelayConfig:
     if not isinstance(sources, list) or not 1 <= len(sources) <= MAX_ALLOWLIST_ENTRIES:
         raise ValueError("allowed_sources must be a bounded non-empty list")
     try:
-        normalized_sources = tuple(str(ipaddress.ip_address(value)) for value in sources)
+        normalized_sources = tuple(
+            str(ipaddress.ip_address(value)) for value in sources
+        )
     except (TypeError, ValueError) as exc:
         raise ValueError("allowed_sources must contain IP addresses") from exc
     if len(set(normalized_sources)) != len(normalized_sources):
@@ -52,7 +59,11 @@ def config_from_options(options: dict[str, Any]) -> RelayConfig:
     if (
         not isinstance(charge_point_id, str)
         or not 1 <= len(charge_point_id) <= 64
-        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in charge_point_id)
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+            for character in charge_point_id
+        )
     ):
         raise ValueError("charge_point_id is invalid")
     upstream_path = _validate_path(options.get("upstream_path"), "upstream_path")
@@ -60,7 +71,11 @@ def config_from_options(options: dict[str, Any]) -> RelayConfig:
         raise ValueError("upstream_path must preserve the HA charge-point identity")
 
     size = options.get("max_message_bytes")
-    if isinstance(size, bool) or not isinstance(size, int) or not 1024 <= size <= 1_048_576:
+    if (
+        isinstance(size, bool)
+        or not isinstance(size, int)
+        or not 1024 <= size <= 1_048_576
+    ):
         raise ValueError("max_message_bytes must be between 1024 and 1048576")
 
     upstream_port = options.get("upstream_port")
@@ -121,6 +136,18 @@ def _configure_logging(level_name: str) -> None:
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
+def _timing_callback(config: RelayConfig, environment: Mapping[str, str]):
+    token = environment.get("SUPERVISOR_TOKEN", "")
+    if not token:
+        LOGGER.error("timing_disabled reason=home_assistant_api_token_unavailable")
+        return None
+    timing_client = HomeAssistantTimingClient(
+        token=token,
+        device_id=config.charge_point_id,
+    )
+    return TimingController(timing_client).apply_after_connection
+
+
 async def run(options_path: Path) -> None:
     options = json.loads(options_path.read_text(encoding="utf-8"))
     if not isinstance(options, dict):
@@ -130,8 +157,9 @@ async def run(options_path: Path) -> None:
         raise ValueError("unsupported log_level")
     _configure_logging(level_name)
     config = config_from_options(options)
+    timing_callback = _timing_callback(config, os.environ)
     _drop_privileges()
-    relay = OcppWebSocketRelay(config)
+    relay = OcppWebSocketRelay(config, on_upstream_connected=timing_callback)
     server = await relay.start()
     LOGGER.info(
         "listening port=%d sources=%d paths=%d upstream=%s uid=%d",

@@ -21,7 +21,11 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             try:
                 async for message in websocket:
                     self.upstream_messages.append(message)
-                    await websocket.send(b"upstream:" + message if isinstance(message, bytes) else "upstream:" + message)
+                    await websocket.send(
+                        b"upstream:" + message
+                        if isinstance(message, bytes)
+                        else "upstream:" + message
+                    )
             except websockets.ConnectionClosed:
                 pass
 
@@ -52,7 +56,10 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "max_message_bytes": 1024,
         }
         values.update(overrides)
-        relay = OcppWebSocketRelay(RelayConfig(**values))
+        on_upstream_connected = values.pop("on_upstream_connected", None)
+        relay = OcppWebSocketRelay(
+            RelayConfig(**values), on_upstream_connected=on_upstream_connected
+        )
         server = await relay.start()
         self.addAsyncCleanup(self.close_server, relay)
         return relay, server.sockets[0].getsockname()[1]
@@ -69,7 +76,9 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             max_size=None,
         )
 
-    async def test_charger_and_upstream_are_separate_sessions_and_forward_both_ways(self):
+    async def test_charger_and_upstream_are_separate_sessions_and_forward_both_ways(
+        self,
+    ):
         relay, port = await self.start_relay()
         async with self.connect(port) as charger:
             await charger.send('[2,"uid","Heartbeat",{}]')
@@ -77,9 +86,51 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await charger.send(b"binary")
             self.assertEqual(await charger.recv(), b"upstream:binary")
             self.assertIsNot(charger, self.upstream_connections[0])
-        self.assertEqual(self.upstream_messages, ['[2,"uid","Heartbeat",{}]', b"binary"])
+        self.assertEqual(
+            self.upstream_messages, ['[2,"uid","Heartbeat",{}]', b"binary"]
+        )
         self.assertEqual(relay.counters["forwarded_charger_messages"], 2)
         self.assertEqual(relay.counters["forwarded_upstream_messages"], 2)
+
+    async def test_upstream_connection_triggers_timing_without_blocking_relay(self):
+        timing_started = asyncio.Event()
+        second_timing_started = asyncio.Event()
+        release_timing = asyncio.Event()
+        timing_calls = 0
+
+        async def apply_timing():
+            nonlocal timing_calls
+            timing_calls += 1
+            if timing_calls == 1:
+                timing_started.set()
+                await release_timing.wait()
+            else:
+                second_timing_started.set()
+
+        relay, port = await self.start_relay(on_upstream_connected=apply_timing)
+        async with self.connect(port) as charger:
+            await asyncio.wait_for(timing_started.wait(), 1)
+            relay._start_timing()
+            await charger.send("hello")
+            self.assertEqual(await charger.recv(), "upstream:hello")
+            release_timing.set()
+            await asyncio.wait_for(second_timing_started.wait(), 1)
+        self.assertEqual(relay.counters["timing_attempts"], 2)
+        self.assertEqual(relay.counters["timing_coalesced"], 1)
+
+    async def test_timing_failure_is_logged_without_interrupting_relay(self):
+        async def apply_timing():
+            raise RuntimeError("timing failed")
+
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="ERROR") as captured:
+            _, port = await self.start_relay(on_upstream_connected=apply_timing)
+            async with self.connect(port) as charger:
+                await asyncio.sleep(0)
+                await charger.send("hello")
+                self.assertEqual(await charger.recv(), "upstream:hello")
+                await asyncio.sleep(0)
+        self.assertIn("timing_task_failed", "\n".join(captured.output))
 
     async def test_upstream_path_is_configured_and_keeps_charge_point_identity(self):
         _, port = await self.start_relay(upstream_path="/ha/central")
@@ -113,7 +164,9 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         dead_port = probe.sockets[0].getsockname()[1]
         probe.close()
         await probe.wait_closed()
-        relay, port = await self.start_relay(upstream_base=f"ws://127.0.0.1:{dead_port}")
+        relay, port = await self.start_relay(
+            upstream_base=f"ws://127.0.0.1:{dead_port}"
+        )
         async with self.connect(port) as charger:
             with self.assertRaises(ConnectionClosedError) as raised:
                 await charger.recv()
@@ -297,7 +350,9 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ServerConfigurationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_server_uses_omv_compatible_websocket_options_and_ten_second_open_timeout(self):
+    async def test_server_uses_omv_compatible_websocket_options_and_ten_second_open_timeout(
+        self,
+    ):
         config = RelayConfig(
             listen_host="127.0.0.1",
             listen_port=9000,
@@ -309,7 +364,9 @@ class ServerConfigurationTests(unittest.IsolatedAsyncioTestCase):
             max_message_bytes=65536,
         )
         fake_server = AsyncMock()
-        with patch("proxy.server.websockets.serve", new=AsyncMock(return_value=fake_server)) as serve:
+        with patch(
+            "proxy.server.websockets.serve", new=AsyncMock(return_value=fake_server)
+        ) as serve:
             relay = OcppWebSocketRelay(config)
             await relay.start()
         kwargs = serve.await_args.kwargs

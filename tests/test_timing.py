@@ -33,10 +33,12 @@ class HomeAssistantTimingClientTests(unittest.TestCase):
             }
 
         client = HomeAssistantTimingClient(
-            token="private-token", request_json=request_json
+            token="private-token",
+            device_id="ocular",
+            request_json=request_json,
         )
 
-        self.assertEqual(client.apply_and_verify("ocular"), expected)
+        self.assertEqual(client.apply_and_verify(), expected)
         self.assertEqual(len(calls), 6)
         for key, value in expected.items():
             self.assertIn(
@@ -73,10 +75,12 @@ class HomeAssistantTimingClientTests(unittest.TestCase):
             }
 
         client = HomeAssistantTimingClient(
-            token="private-token", request_json=request_json
+            token="private-token",
+            device_id="ocular",
+            request_json=request_json,
         )
         with self.assertRaisesRegex(TimingVerificationError, "reboot"):
-            client.apply_and_verify("ocular")
+            client.apply_and_verify()
 
     def test_rejects_missing_or_mismatched_readback(self):
         responses = iter(
@@ -91,26 +95,22 @@ class HomeAssistantTimingClientTests(unittest.TestCase):
         )
         client = HomeAssistantTimingClient(
             token="private-token",
+            device_id="ocular",
             request_json=lambda path, payload: next(responses),
         )
 
         with self.assertRaisesRegex(TimingVerificationError, "HeartbeatInterval"):
-            client.apply_and_verify("ocular")
+            client.apply_and_verify()
 
     def test_requires_a_bounded_device_id_and_token(self):
-        calls = []
-        client = HomeAssistantTimingClient(
-            token="token", request_json=lambda path, payload: calls.append(path)
-        )
-        for device_id in ("", "bad id", "x" * 65, None):
+        for device_id in ("", "bad id", "x" * 65):
             with self.subTest(device_id=device_id), self.assertRaises(ValueError):
-                client.apply_and_verify(device_id)
-        self.assertEqual(calls, [])
+                HomeAssistantTimingClient(token="token", device_id=device_id)
         with self.assertRaises(ValueError):
-            HomeAssistantTimingClient(token="")
+            HomeAssistantTimingClient(token="", device_id="ocular")
 
     def test_normalizes_remote_disconnect_for_retry(self):
-        client = HomeAssistantTimingClient(token="private-token")
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
         with patch(
             "proxy.timing.urlopen", side_effect=RemoteDisconnected("peer closed")
         ):
@@ -118,13 +118,13 @@ class HomeAssistantTimingClientTests(unittest.TestCase):
                 client._default_request_json("/test", {})
 
     def test_normalizes_malformed_utf8_for_retry(self):
-        client = HomeAssistantTimingClient(token="private-token")
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
         with patch("proxy.timing.urlopen", return_value=BytesIO(b"\xff")):
             with self.assertRaises(TimingVerificationError):
                 client._default_request_json("/test", {})
 
     def test_does_not_hide_unrelated_value_error(self):
-        client = HomeAssistantTimingClient(token="private-token")
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
         with patch(
             "proxy.timing.urlopen", side_effect=ValueError("programming defect")
         ):
@@ -138,10 +138,9 @@ class TimingControllerTests(unittest.IsolatedAsyncioTestCase):
         sleeps = []
 
         class Client:
-            def apply_and_verify(self, device_id):
+            def apply_and_verify(self):
                 nonlocal attempts
                 attempts += 1
-                assert device_id == "driveway"
                 if attempts == 1:
                     raise TimingVerificationError("not connected")
                 return {
@@ -156,7 +155,7 @@ class TimingControllerTests(unittest.IsolatedAsyncioTestCase):
         controller = TimingController(
             Client(), initial_delay=5, retry_delays=(10,), sleep=sleep
         )
-        result = await controller.apply_after_connection("driveway")
+        result = await controller.apply_after_connection()
 
         self.assertEqual(attempts, 2)
         self.assertEqual(sleeps, [5, 10])
@@ -164,14 +163,14 @@ class TimingControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stops_after_bounded_retries(self):
         class Client:
-            def apply_and_verify(self, device_id):
+            def apply_and_verify(self):
                 raise TimingVerificationError("unavailable")
 
         controller = TimingController(
             Client(), initial_delay=0, retry_delays=(0, 0), sleep=asyncio.sleep
         )
         with self.assertRaisesRegex(TimingVerificationError, "unavailable"):
-            await controller.apply_after_connection("driveway")
+            await controller.apply_after_connection()
 
 
 if __name__ == "__main__":

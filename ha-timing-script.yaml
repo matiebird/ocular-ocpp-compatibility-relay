@@ -3,11 +3,10 @@ mode: single
 icon: mdi:ev-station
 description: >-
   Sets the charger heartbeat, charger WebSocket ping and meter reporting intervals,
-  then reads all three values back. Set ocpp_device_id to the charge_point_id
-  shown in the relay log; if you pinned an ID with the installer it is already
-  filled in.
+  then reads all three values back. Edit ocpp_device_id if your OCPP device uses
+  a different Home Assistant device ID.
 variables:
-  ocpp_device_id: central
+  ocpp_device_id: ocular
 sequence:
   - action: ocpp.configure
     data:

@@ -16,6 +16,7 @@ LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 OCPP_SUBPROTOCOL = "ocpp1.6"
 OPEN_TIMEOUT_SECONDS = 10
 HANDSHAKE_READ_LIMIT = 16_384
+LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
 
 
@@ -49,6 +50,11 @@ class GuardedServerProtocol(WebSocketServerProtocol):
         if path not in self.relay.config.expected_paths:
             self.relay.counters["rejected_path"] += 1
             LOGGER.warning("opening_rejected reason=path source=%s", source)
+            # The request path is only logged at debug level because it is
+            # supplied by the caller and can carry unwanted detail.
+            LOGGER.debug(
+                "rejected_path source=%s path=%s", source, path[:LOGGED_PATH_LIMIT]
+            )
             return self._rejection(HTTPStatus.NOT_FOUND, b"path rejected\n")
 
         offered = []
@@ -132,7 +138,12 @@ class OcppWebSocketRelay:
             if not charger.closed:
                 await charger.close(code=1011, reason="upstream unavailable")
         finally:
-            LOGGER.info("connection_closed source=%s", source)
+            LOGGER.info(
+                "connection_closed source=%s code=%s closed_by=%s",
+                source,
+                charger.close_code,
+                self._closed_by(charger),
+            )
 
     async def _bridge(self, charger, upstream) -> None:
         charger_to_upstream = asyncio.create_task(
@@ -187,6 +198,13 @@ class OcppWebSocketRelay:
     @staticmethod
     def _message_size(message: str | bytes) -> int:
         return len(message) if isinstance(message, bytes) else len(message.encode("utf-8"))
+
+    @staticmethod
+    def _closed_by(charger) -> str:
+        """Return "charger" or "relay" for whichever side closed first."""
+        if charger.close_rcvd_then_sent is None:
+            return "unknown"
+        return "charger" if charger.close_rcvd_then_sent else "relay"
 
     @staticmethod
     def _source(websocket) -> str:

@@ -34,7 +34,7 @@ rollback_on_error() {
     rm -rf "$TARGET_DIR"
     if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
       cp -a "$BACKUP_DIR" "$TARGET_DIR"
-      ha supervisor reload >/dev/null 2>&1
+      ha store reload >/dev/null 2>&1
       if (( HAD_EXISTING_APP )); then
         ha apps install "$SLUG" >/dev/null 2>&1 && ha apps start "$SLUG" >/dev/null 2>&1
         printf 'Previous relay restored and restart attempted.\n' >&2
@@ -42,7 +42,7 @@ rollback_on_error() {
         printf 'Previous source restored. No previous running app existed.\n' >&2
       fi
     else
-      ha supervisor reload >/dev/null 2>&1
+      ha store reload >/dev/null 2>&1
       printf 'Partial fresh installation removed.\n' >&2
     fi
   fi
@@ -136,7 +136,7 @@ sed -i \
   -e "s/upstream_port: 9000/upstream_port: $HA_OCPP_PORT/g" \
   "$TARGET_DIR/config.yaml"
 
-ha supervisor reload
+ha store reload
 ha apps install "$SLUG"
 ha apps start "$SLUG"
 

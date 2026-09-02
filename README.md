@@ -173,7 +173,11 @@ If you do not see `connection_open`, do not keep changing settings at random. Ch
 
 Do not treat one successful command after reboot as proof. Leave it connected for a few minutes and try `ocpp.get_configuration` more than once before relying on it.
 
-## Recommended charger timing
+If you see `connection_open` but the charger reconnects every few minutes, apply the charger timing below before looking any further.
+
+## Required charger timing
+
+Apply this as part of the install. The relay answers the Home Assistant WebSocket pings itself and does not pass them on, so the charger sees no traffic at all between OCPP messages. Left at the firmware default of one heartbeat per hour, the charger treats the connection as idle and closes it with `1001 going away` after a few minutes. A 60 second heartbeat gives it traffic of its own and the connection stays up.
 
 The supplied `ha-timing-script.yaml` sets and reads back:
 
@@ -183,7 +187,7 @@ WebSocketPingInterval = 60
 MeterValueSampleInterval = 10
 ```
 
-Paste it into a Home Assistant script. Change this line if your OCPP device ID is not `ocular`:
+Paste it into a Home Assistant script under a script ID of your choice. Change this line if your OCPP device ID is not `ocular`, and note the value is case sensitive and must match the charger ID that Home Assistant shows:
 
 ```yaml
 ocpp_device_id: ocular

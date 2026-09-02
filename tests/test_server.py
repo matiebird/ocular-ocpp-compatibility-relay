@@ -149,6 +149,31 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.upstream_messages, [])
         self.assertEqual(relay.counters["oversized_messages"], 1)
 
+    async def test_rejected_path_is_logged_at_debug(self):
+        relay, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="DEBUG") as captured:
+            with self.assertRaises((InvalidStatusCode, ConnectionClosedError)):
+                async with self.connect(port, path="/wrong"):
+                    pass
+        output = "\n".join(captured.output)
+        self.assertIn("rejected_path", output)
+        self.assertIn("/wrong", output)
+        self.assertEqual(relay.counters["rejected_path"], 1)
+
+    async def test_connection_closed_records_the_code_and_the_side_that_closed(self):
+        _, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port) as charger:
+                await charger.send("hello")
+                await charger.recv()
+            await asyncio.sleep(0.05)
+        output = "\n".join(captured.output)
+        self.assertIn("connection_closed", output)
+        self.assertIn("code=1000", output)
+        self.assertIn("closed_by=charger", output)
+
     async def test_logs_do_not_contain_raw_credentials_or_frames(self):
         relay, port = await self.start_relay()
         logger = logging.getLogger("ocular_ocpp_websocket_proxy")

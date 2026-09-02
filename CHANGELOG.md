@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7
+
+- Use `ha store reload` so the installer registers the app on current Home Assistant hosts.
+- Stop running the tests inside the add-on image so a custom charger ID or port can build.
+- Log the rejected path at debug level and record who closed each connection.
+- Make the charger timing a required install step and explain why the heartbeat matters.
+
 ## 0.3.6
 
 - Add plain-language, generic Home Assistant controls for Start, Pause, Resume and Stop.

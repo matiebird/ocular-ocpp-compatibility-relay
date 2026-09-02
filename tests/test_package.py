@@ -12,17 +12,7 @@ class PackageTests(unittest.TestCase):
         self.assertRegex(dockerfile, r"(?m)^RUN .*websockets==12\.0")
         self.assertNotRegex(dockerfile, r"websockets[><~!]=")
 
-    def test_docker_build_includes_files_used_by_package_tests(self):
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        for name in (
-            "install.sh",
-            "uninstall.sh",
-            "ha-timing-script.yaml",
-            "README.md",
-            "CHARGER_CONTROL_WORKAROUNDS.md",
-            "examples",
-        ):
-            self.assertIn(name, dockerfile)
+    def test_installer_copies_the_documented_package_files(self):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('"$SOURCE_DIR/install.sh"', installer)
         self.assertIn('"$SOURCE_DIR/uninstall.sh"', installer)

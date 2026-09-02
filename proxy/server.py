@@ -16,7 +16,14 @@ LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 OCPP_SUBPROTOCOL = "ocpp1.6"
 OPEN_TIMEOUT_SECONDS = 10
 HANDSHAKE_READ_LIMIT = 16_384
+LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
+
+
+def _safe_log_path(request_target: str) -> str:
+    """Return a bounded, query-free, control-character-safe path for diagnostics."""
+    path = request_target.partition("?")[0][:LOGGED_PATH_LIMIT]
+    return ascii(path)
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,12 @@ class RelayConfig:
     allowed_sources: tuple[str, ...]
     expected_paths: tuple[str, ...]
     max_message_bytes: int
+
+
+@dataclass(frozen=True)
+class BridgeTermination:
+    cause: str
+    upstream_code: int | None
 
 
 class GuardedServerProtocol(WebSocketServerProtocol):
@@ -49,6 +62,9 @@ class GuardedServerProtocol(WebSocketServerProtocol):
         if path not in self.relay.config.expected_paths:
             self.relay.counters["rejected_path"] += 1
             LOGGER.warning("opening_rejected reason=path source=%s", source)
+            LOGGER.debug(
+                "rejected_path source=%s path=%s", source, _safe_log_path(path)
+            )
             return self._rejection(HTTPStatus.NOT_FOUND, b"path rejected\n")
 
         offered = []
@@ -73,9 +89,11 @@ class OcppWebSocketRelay:
     def __init__(self, config: RelayConfig) -> None:
         self.config = config
         self.server = None
+        self._stopping = False
         self.counters: Counter[str] = Counter()
 
     async def start(self):
+        self._stopping = False
         self.server = await websockets.serve(
             self._handle_charger,
             self.config.listen_host,
@@ -94,12 +112,14 @@ class OcppWebSocketRelay:
 
     async def stop(self) -> None:
         if self.server is not None:
+            self._stopping = True
             self.server.close()
             await self.server.wait_closed()
             self.server = None
 
     async def _handle_charger(self, charger, path: str) -> None:
         source = self._source(charger)
+        termination = BridgeTermination("upstream_failure", None)
         if charger.subprotocol != OCPP_SUBPROTOCOL:
             self.counters["rejected_subprotocol"] += 1
             await charger.close(code=1002, reason="ocpp1.6 required")
@@ -123,34 +143,57 @@ class OcppWebSocketRelay:
                 if upstream.subprotocol != OCPP_SUBPROTOCOL:
                     raise RuntimeError("upstream rejected ocpp1.6 subprotocol")
                 self.counters["upstream_connections"] += 1
-                await self._bridge(charger, upstream)
+                termination = await self._bridge(charger, upstream)
         except asyncio.CancelledError:
+            termination = BridgeTermination("relay_shutdown", None)
             raise
         except Exception as exc:
-            self.counters["upstream_failures"] += 1
-            LOGGER.error("upstream_failure error_type=%s", type(exc).__name__)
+            if self._stopping:
+                termination = BridgeTermination("relay_shutdown", None)
+            else:
+                self.counters["upstream_failures"] += 1
+                LOGGER.error("upstream_failure error_type=%s", type(exc).__name__)
             if not charger.closed:
                 await charger.close(code=1011, reason="upstream unavailable")
         finally:
-            LOGGER.info("connection_closed source=%s", source)
+            LOGGER.info(
+                "connection_closed source=%s cause=%s charger_code=%s upstream_code=%s",
+                source,
+                termination.cause,
+                charger.close_code,
+                termination.upstream_code,
+            )
 
-    async def _bridge(self, charger, upstream) -> None:
+    async def _bridge(self, charger, upstream) -> BridgeTermination:
+        oversized_message = asyncio.Event()
         charger_to_upstream = asyncio.create_task(
             self._copy_messages(
-                charger, upstream, "forwarded_charger_messages", charger, upstream
+                charger,
+                upstream,
+                "forwarded_charger_messages",
+                charger,
+                upstream,
+                oversized_message,
             )
         )
         upstream_to_charger = asyncio.create_task(
             self._copy_messages(
-                upstream, charger, "forwarded_upstream_messages", charger, upstream
+                upstream,
+                charger,
+                "forwarded_upstream_messages",
+                charger,
+                upstream,
+                oversized_message,
             )
         )
         tasks = {charger_to_upstream, upstream_to_charger}
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
-        results = await asyncio.gather(*done, *pending, return_exceptions=True)
-        for result in results:
+        ordered_tasks = [*done, *pending]
+        results = await asyncio.gather(*ordered_tasks, return_exceptions=True)
+        task_results = dict(zip(ordered_tasks, results))
+        for result in task_results.values():
             if isinstance(result, asyncio.CancelledError):
                 continue
             if isinstance(result, Exception) and not isinstance(
@@ -158,31 +201,59 @@ class OcppWebSocketRelay:
             ):
                 raise result
 
+        if oversized_message.is_set() or any(
+            result == "message_too_large" for result in task_results.values()
+        ):
+            return BridgeTermination("message_too_large", upstream.close_code)
+
+        if self._stopping:
+            return BridgeTermination("relay_shutdown", upstream.close_code)
+
         if upstream_to_charger in done and not charger.closed:
             if upstream.close_code not in (1000, 1001):
                 self.counters["upstream_failures"] += 1
                 LOGGER.error("upstream_failure error_type=ConnectionClosed")
                 await charger.close(code=1011, reason="upstream unavailable")
+                return BridgeTermination("upstream_failure", upstream.close_code)
             else:
                 await charger.close(code=1001, reason="upstream closed")
+                return BridgeTermination("upstream_close", upstream.close_code)
         if charger_to_upstream in done and not upstream.closed:
             await upstream.close(code=1001, reason="charger closed")
+            return BridgeTermination("charger_close", upstream.close_code)
+
+        if upstream_to_charger in done:
+            cause = (
+                "upstream_close"
+                if upstream.close_code in (1000, 1001)
+                else "upstream_failure"
+            )
+            return BridgeTermination(cause, upstream.close_code)
+        return BridgeTermination("charger_close", upstream.close_code)
 
     async def _copy_messages(
-        self, source, destination, counter_name: str, charger, upstream
-    ) -> None:
+        self,
+        source,
+        destination,
+        counter_name: str,
+        charger,
+        upstream,
+        oversized_message: asyncio.Event,
+    ) -> str | None:
         async for message in source:
             if self._message_size(message) > self.config.max_message_bytes:
                 self.counters["oversized_messages"] += 1
                 LOGGER.warning("message_rejected reason=size direction=%s", counter_name)
+                oversized_message.set()
                 await asyncio.gather(
                     charger.close(code=1009, reason="message too large"),
                     upstream.close(code=1009, reason="message too large"),
                     return_exceptions=True,
                 )
-                return
+                return "message_too_large"
             await destination.send(message)
             self.counters[counter_name] += 1
+        return None
 
     @staticmethod
     def _message_size(message: str | bytes) -> int:

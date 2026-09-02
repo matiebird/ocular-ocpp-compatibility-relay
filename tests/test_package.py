@@ -12,17 +12,14 @@ class PackageTests(unittest.TestCase):
         self.assertRegex(dockerfile, r"(?m)^RUN .*websockets==12\.0")
         self.assertNotRegex(dockerfile, r"websockets[><~!]=")
 
-    def test_docker_build_includes_files_used_by_package_tests(self):
+    def test_docker_build_runs_runtime_tests_without_package_default_assertions(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        for name in (
-            "install.sh",
-            "uninstall.sh",
-            "ha-timing-script.yaml",
-            "README.md",
-            "CHARGER_CONTROL_WORKAROUNDS.md",
-            "examples",
-        ):
-            self.assertIn(name, dockerfile)
+        self.assertIn("test_main.py", dockerfile)
+        self.assertIn("test_server.py", dockerfile)
+        self.assertNotIn("test_package.py", dockerfile)
+        self.assertNotIn("python -m unittest discover -s tests -v", dockerfile)
+
+    def test_installer_copies_documented_files_and_reloads_the_app_store(self):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('"$SOURCE_DIR/install.sh"', installer)
         self.assertIn('"$SOURCE_DIR/uninstall.sh"', installer)
@@ -31,6 +28,12 @@ class PackageTests(unittest.TestCase):
         self.assertIn('"$SOURCE_DIR/CHARGER_CONTROL_WORKAROUNDS.md"', installer)
         self.assertIn('"$SOURCE_DIR/docs"', installer)
         self.assertIn('"$SOURCE_DIR/examples"', installer)
+        self.assertIn("ha store reload", installer)
+        self.assertNotIn("ha supervisor reload", installer)
+
+        uninstaller = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+        self.assertIn("ha store reload", uninstaller)
+        self.assertNotIn("ha supervisor reload", uninstaller)
 
     def test_community_control_workarounds_are_packaged(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -177,6 +180,10 @@ class PackageTests(unittest.TestCase):
         self.assertIn("WebSocketPingInterval", timing)
         self.assertIn("MeterValueSampleInterval", timing)
         self.assertIn("uninstall.sh", guide)
+        self.assertIn("required manual post-install step", guide.lower())
+        self.assertIn("connection-critical", guide.lower())
+        self.assertIn("telemetry frequency", guide.lower())
+        self.assertIn("required manual charger timing", installer.lower())
 
     def test_uninstaller_is_included_and_does_not_touch_the_ocpp_backend(self):
         uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")

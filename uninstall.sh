@@ -20,7 +20,7 @@ if ha apps info "$SLUG" >/dev/null 2>&1; then
   ha apps uninstall "$SLUG"
 fi
 rm -rf "$TARGET_DIR"
-ha supervisor reload
+ha store reload
 
 cat <<EOF
 The compatibility relay has been removed.

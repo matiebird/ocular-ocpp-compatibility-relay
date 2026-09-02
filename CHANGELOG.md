@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.7
+
+- Refresh the Home Assistant app store correctly during install, rollback and removal.
+- Allow custom charger IDs and OCPP ports while retaining runtime tests in the image build.
+- Log query-free, escaped rejected paths at debug level without recording credentials.
+- Record explicit charger, upstream, relay and message-size connection termination causes.
+- Make charger timing a required manual post-install step with readback verification.
+
 ## 0.3.6
 
 - Add plain-language, generic Home Assistant controls for Start, Pause, Resume and Stop.

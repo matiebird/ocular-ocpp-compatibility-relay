@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
 from typing import Any
-from urllib.parse import urlsplit
 
 import websockets
 from websockets.legacy.server import WebSocketServerProtocol
@@ -23,7 +22,7 @@ WEBSOCKET_MAX_QUEUE = 16
 
 def _safe_log_path(request_target: str) -> str:
     """Return a bounded, query-free, control-character-safe path for diagnostics."""
-    path = urlsplit(request_target).path[:LOGGED_PATH_LIMIT]
+    path = request_target.partition("?")[0][:LOGGED_PATH_LIMIT]
     return ascii(path)
 
 

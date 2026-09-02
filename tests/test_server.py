@@ -168,6 +168,32 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("token", output)
         self.assertEqual(relay.counters["rejected_path"], 1)
 
+    async def test_malformed_rejected_path_still_returns_404(self):
+        relay, port = await self.start_relay()
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        self.addAsyncCleanup(writer.wait_closed)
+        with self.assertLogs(logger, level="DEBUG") as captured:
+            writer.write(
+                (
+                    "GET //[ HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "Sec-WebSocket-Protocol: ocpp1.6\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            await writer.drain()
+            status_line = await asyncio.wait_for(reader.readline(), 1)
+        writer.close()
+        output = "\n".join(captured.output)
+        self.assertIn(b"404", status_line)
+        self.assertIn("path='//['", output)
+        self.assertEqual(relay.counters["rejected_path"], 1)
+
     def test_safe_log_path_escapes_control_characters(self):
         rendered = _safe_log_path("/wrong\x1b[31m\r\nnext?token=TOP-SECRET")
         self.assertIn("\\x1b", rendered)

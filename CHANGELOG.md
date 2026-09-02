@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.11
+
+- Withdraw the unsafe 0.3.10 auto-identity, CIDR and multi-charger expansion.
+- Restore the dedicated single-charger IP and path allowlists from 0.3.9.
+- Restore bounded single-job timing behavior while the broader design is corrected and reviewed.
+
+## 0.3.10 — withdrawn
+
+- This release was withdrawn after independent review found unbounded learned sessions and timing work, potentially overlong shutdown, overlapping same-ID upstream sessions, unusable IPv6 claims and installer/YAML validation gaps.
+
 ## 0.3.9
 
 - Normalize dropped HTTP connections and malformed response encoding into bounded timing retries.

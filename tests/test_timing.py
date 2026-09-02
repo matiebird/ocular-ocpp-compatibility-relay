@@ -1,5 +1,8 @@
 import asyncio
 import unittest
+from http.client import RemoteDisconnected
+from io import BytesIO
+from unittest.mock import patch
 
 from proxy.timing import (
     HomeAssistantTimingClient,
@@ -105,6 +108,28 @@ class HomeAssistantTimingClientTests(unittest.TestCase):
                 HomeAssistantTimingClient(token="token", device_id=device_id)
         with self.assertRaises(ValueError):
             HomeAssistantTimingClient(token="", device_id="ocular")
+
+    def test_normalizes_remote_disconnect_for_retry(self):
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
+        with patch(
+            "proxy.timing.urlopen", side_effect=RemoteDisconnected("peer closed")
+        ):
+            with self.assertRaises(TimingVerificationError):
+                client._default_request_json("/test", {})
+
+    def test_normalizes_malformed_utf8_for_retry(self):
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
+        with patch("proxy.timing.urlopen", return_value=BytesIO(b"\xff")):
+            with self.assertRaises(TimingVerificationError):
+                client._default_request_json("/test", {})
+
+    def test_does_not_hide_unrelated_value_error(self):
+        client = HomeAssistantTimingClient(token="private-token", device_id="ocular")
+        with patch(
+            "proxy.timing.urlopen", side_effect=ValueError("programming defect")
+        ):
+            with self.assertRaisesRegex(ValueError, "programming defect"):
+                client._default_request_json("/test", {})
 
 
 class TimingControllerTests(unittest.IsolatedAsyncioTestCase):

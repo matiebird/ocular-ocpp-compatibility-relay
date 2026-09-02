@@ -24,6 +24,7 @@ The existing Home Assistant OCPP listener stays where it is. The installer does 
 - Home Assistant OS or Home Assistant Supervised
 - A working SSH session on the Home Assistant host with access to the Home Assistant CLI (`ha`)
 - Home Assistant OCPP integration already running, normally on port 9000
+- Home Assistant OCPP service-action response capability: `ocpp.configure` must return `reboot_required`, and `ocpp.get_configuration` must return `value`
 - Ocular charger on wired Ethernet with a reserved DHCP address
 - Charger configured for OCPP 1.6J over plain `WS` on a trusted home LAN
 
@@ -31,6 +32,8 @@ Supported Home Assistant host architectures:
 
 - aarch64
 - amd64
+
+OCPP integration custom forks do not always use versions comparable with the upstream release numbers, so compatibility is defined by those two action-response fields rather than a semantic-version floor. If they are unavailable, charger traffic continues normally, automatic timing reports `timing_verification_failed`, and the supplied manual timing script remains available.
 
 ## Installation prerequisites
 
@@ -264,7 +267,7 @@ The app:
 
 - accepts only the configured charger IP;
 - accepts only the configured path and `ocpp1.6` subprotocol;
-- runs without host networking, privileges or full Home Assistant access;
+- runs without host networking, privileges or `full_access` host permissions;
 - receives a Home Assistant API token; the relay code restricts its use to the documented OCPP timing services;
 - drops Linux privileges inside the container;
 - limits queues, handshake buffers and complete application-message size;

@@ -349,6 +349,74 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(relay.counters["forwarded_charger_messages"], 1)
 
 
+class FakeSession:
+    """Minimal WebSocket stand-in: yields queued messages, then behaves closed."""
+
+    def __init__(self, incoming=(), *, fail_send=False):
+        self.incoming = list(incoming)
+        self.sent = []
+        self.closed = False
+        self.close_code = None
+        self.fail_send = fail_send
+        self.released = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.incoming:
+            return self.incoming.pop(0)
+        await self.released.wait()
+        self.closed = True
+        raise StopAsyncIteration
+
+    async def send(self, message):
+        if self.fail_send:
+            self.closed = True
+            self.close_code = 1006
+            raise ConnectionClosedError(None, None)
+        self.sent.append(message)
+
+    async def close(self, code=1000, reason=""):
+        self.closed = True
+        self.close_code = code
+        self.released.set()
+
+
+class BridgeCauseTests(unittest.IsolatedAsyncioTestCase):
+    def relay(self):
+        return OcppWebSocketRelay(
+            RelayConfig(
+                listen_host="127.0.0.1",
+                listen_port=0,
+                upstream_base="ws://127.0.0.1:1",
+                upstream_path="/central/central",
+                charge_point_id="central",
+                allowed_sources=("127.0.0.1",),
+                expected_paths=("/central/central",),
+                max_message_bytes=1024,
+            )
+        )
+
+    async def test_charger_dropping_mid_forward_is_a_charger_close(self):
+        charger = FakeSession(fail_send=True)
+        upstream = FakeSession(incoming=["from-upstream"])
+        relay = self.relay()
+        termination = await relay._bridge(charger, upstream)
+        self.assertEqual(termination.cause, "charger_close")
+        self.assertEqual(upstream.close_code, 1001)
+        self.assertEqual(relay.counters["upstream_failures"], 0)
+
+    async def test_upstream_dropping_mid_forward_is_an_upstream_failure(self):
+        charger = FakeSession(incoming=["from-charger"])
+        upstream = FakeSession(fail_send=True)
+        relay = self.relay()
+        termination = await relay._bridge(charger, upstream)
+        self.assertEqual(termination.cause, "upstream_failure")
+        self.assertEqual(charger.close_code, 1011)
+        self.assertEqual(relay.counters["upstream_failures"], 1)
+
+
 class ServerConfigurationTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_uses_omv_compatible_websocket_options_and_ten_second_open_timeout(
         self,

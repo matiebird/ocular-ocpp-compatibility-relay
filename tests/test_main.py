@@ -1,7 +1,14 @@
+import asyncio
+import json
 import logging
+import os
+import signal
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from proxy.main import _configure_logging, _timing_callback, config_from_options
+from proxy.main import _configure_logging, _timing_callback, config_from_options, run
 
 BASE = {
     "allowed_sources": ["192.0.2.10"],
@@ -78,10 +85,41 @@ class OptionsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "charge-point identity"):
             config_from_options({**BASE, "upstream_path": "/central/other"})
 
+    def test_rejects_non_canonical_paths(self):
+        for path in ("/central/..", "/./central", "/central/.", "/a//b", "/a/../b"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                config_from_options({**BASE, "expected_paths": [path]})
+
     def test_rejects_unbounded_message_size(self):
         for size in (0, 1023, 1048577, True):
             with self.subTest(size=size), self.assertRaises(ValueError):
                 config_from_options({**BASE, "max_message_bytes": size})
+
+
+class ShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sigterm_stops_relay_cleanly(self):
+        relay = AsyncMock()
+        with tempfile.TemporaryDirectory() as directory:
+            options_path = Path(directory) / "options.json"
+            options_path.write_text(json.dumps(BASE), encoding="utf-8")
+            logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+            with (
+                patch("proxy.main._configure_logging"),
+                patch("proxy.main._drop_privileges"),
+                patch("proxy.main.OcppWebSocketRelay", return_value=relay),
+                self.assertLogs(logger, level="INFO") as captured,
+            ):
+                runner = asyncio.create_task(run(options_path))
+                while not relay.start.await_count:
+                    await asyncio.sleep(0)
+                os.kill(os.getpid(), signal.SIGTERM)
+                await asyncio.wait_for(runner, 2)
+        relay.start.assert_awaited_once()
+        relay.stop.assert_awaited_once()
+        output = "\n".join(captured.output)
+        self.assertIn("shutdown_requested signal=SIGTERM", output)
+        self.assertIn("stopped", output)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)
 
 
 if __name__ == "__main__":

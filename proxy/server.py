@@ -253,7 +253,9 @@ class OcppWebSocketRelay:
         if self._stopping:
             return BridgeTermination("relay_shutdown", upstream.close_code)
 
-        if upstream_to_charger in done and not charger.closed:
+        # A copy task only finishes when its source or destination session has
+        # ended, so the side that is still open tells us which peer went away.
+        if not charger.closed:
             if upstream.close_code not in (1000, 1001):
                 self.counters["upstream_failures"] += 1
                 LOGGER.error("upstream_failure error_type=ConnectionClosed")
@@ -262,11 +264,11 @@ class OcppWebSocketRelay:
             else:
                 await charger.close(code=1001, reason="upstream closed")
                 return BridgeTermination("upstream_close", upstream.close_code)
-        if charger_to_upstream in done and not upstream.closed:
+        if not upstream.closed:
             await upstream.close(code=1001, reason="charger closed")
             return BridgeTermination("charger_close", upstream.close_code)
 
-        if upstream_to_charger in done:
+        if upstream_to_charger in done and charger_to_upstream not in done:
             cause = (
                 "upstream_close"
                 if upstream.close_code in (1000, 1001)

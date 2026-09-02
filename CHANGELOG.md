@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10
+
+- Stop cleanly on SIGTERM/SIGINT so app stop and restart close charger sessions with a WebSocket close frame instead of waiting for the container kill timeout, and log `relay_shutdown` for those closures.
+- Use the Supervisor default init so container signals reach the relay process.
+- Attribute a charger dropping mid-forward to `charger_close` rather than `upstream_failure` in connection diagnostics.
+- Reject `.` and `..` path segments in `expected_paths` and `upstream_path`.
+
 ## 0.3.9
 
 - Normalize dropped HTTP connections and malformed response encoding into bounded timing retries.

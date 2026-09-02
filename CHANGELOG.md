@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.9
+
+- Normalize dropped HTTP connections and malformed response encoding into bounded timing retries.
+- Document the required Home Assistant OCPP service-action response capability for upstream releases and custom forks.
+
 ## 0.3.8
 
 - Apply the required Ocular timing values automatically after each charger connection.

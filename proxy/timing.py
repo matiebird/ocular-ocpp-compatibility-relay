@@ -4,8 +4,8 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from http.client import HTTPException
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
@@ -94,7 +94,12 @@ class HomeAssistantTimingClient:
         try:
             with urlopen(request, timeout=15) as response:
                 return json.load(response)
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (
+            HTTPException,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as exc:
             raise TimingVerificationError(
                 f"Home Assistant timing service failed ({type(exc).__name__})"
             ) from exc

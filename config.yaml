@@ -1,5 +1,5 @@
 name: Ocular OCPP Compatibility Relay
-version: "0.3.8"
+version: "0.3.9"
 slug: ocular_ocpp_compatibility_relay
 description: Charger-compatible WebSocket relay for Ocular LTE Plus V3 OCPP dropouts
 url: "https://github.com/matiebird/ocular-ocpp-compatibility-relay"

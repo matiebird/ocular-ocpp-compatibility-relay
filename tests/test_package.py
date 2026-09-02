@@ -104,6 +104,13 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("rerun the supplied timing script", guide.lower())
         self.assertNotIn("does not generate any of the OCPP commands", guide)
 
+    def test_declares_required_ocpp_service_response_capability(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+        self.assertIn("ocpp service-action response capability", readme)
+        self.assertIn("reboot_required", readme)
+        self.assertIn("must return `value`", readme)
+        self.assertIn("custom forks", readme)
+
     def test_ssh_wording_is_method_agnostic_with_optional_app_examples(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         examples = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")

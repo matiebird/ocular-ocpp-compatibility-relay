@@ -6,6 +6,7 @@
 - Use the Supervisor default init so container signals reach the relay process.
 - Attribute a charger dropping mid-forward to `charger_close` rather than `upstream_failure` in connection diagnostics.
 - Reject `.` and `..` path segments in `expected_paths` and `upstream_path`.
+- Fill the chosen charge-point ID into the installed fallback timing script and example package, and default both to `central` like the app, so custom charger IDs work end to end.
 
 ## 0.3.9
 

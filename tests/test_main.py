@@ -1,8 +1,7 @@
 import logging
 import unittest
 
-from proxy.main import _configure_logging, config_from_options
-
+from proxy.main import _configure_logging, _timing_callback, config_from_options
 
 BASE = {
     "allowed_sources": ["192.0.2.10"],
@@ -16,6 +15,14 @@ BASE = {
 
 
 class OptionsTests(unittest.TestCase):
+    def test_missing_supervisor_token_keeps_relay_available(self):
+        config = config_from_options(BASE)
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="ERROR") as captured:
+            callback = _timing_callback(config, {})
+        self.assertIsNone(callback)
+        self.assertIn("timing_disabled", "\n".join(captured.output))
+
     def test_debug_mode_keeps_websocket_transport_logs_secret_safe(self):
         root = logging.getLogger()
         websocket_logger = logging.getLogger("websockets")
@@ -59,9 +66,13 @@ class OptionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             config_from_options({**BASE, "expected_paths": []})
         with self.assertRaises(ValueError):
-            config_from_options({**BASE, "expected_paths": [f"/p/{i}" for i in range(9)]})
+            config_from_options(
+                {**BASE, "expected_paths": [f"/p/{i}" for i in range(9)]}
+            )
         with self.assertRaises(ValueError):
-            config_from_options({**BASE, "expected_paths": ["/central/central", "/central/central"]})
+            config_from_options(
+                {**BASE, "expected_paths": ["/central/central", "/central/central"]}
+            )
 
     def test_rejects_upstream_path_that_changes_ha_charge_point_identity(self):
         with self.assertRaisesRegex(ValueError, "charge-point identity"):

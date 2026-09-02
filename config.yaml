@@ -1,5 +1,5 @@
 name: Ocular OCPP Compatibility Relay
-version: "0.3.7"
+version: "0.3.8"
 slug: ocular_ocpp_compatibility_relay
 description: Charger-compatible WebSocket relay for Ocular LTE Plus V3 OCPP dropouts
 url: "https://github.com/matiebird/ocular-ocpp-compatibility-relay"
@@ -12,6 +12,7 @@ boot: auto
 host_network: false
 privileged: []
 full_access: false
+homeassistant_api: true
 ports:
   9000/tcp: 19000
 ports_description:

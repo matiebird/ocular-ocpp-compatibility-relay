@@ -1,7 +1,6 @@
-from pathlib import Path
 import re
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,6 +94,15 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("sungrow", controls.lower())
         self.assertNotIn("battery_soc", controls.lower())
         self.assertNotIn("solar_forecast", controls.lower())
+        self.assertNotIn("ocular_apply_stable_timing", controls)
+
+    def test_automatic_timing_is_consistent_across_guides(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide = (ROOT / "CHARGER_CONTROL_WORKAROUNDS.md").read_text(encoding="utf-8")
+        self.assertIn("Automatic post-connect charger timing", readme)
+        self.assertIn("automatically applies and verifies", guide)
+        self.assertNotIn("rerun the supplied timing script", guide.lower())
+        self.assertNotIn("does not generate any of the OCPP commands", guide)
 
     def test_ssh_wording_is_method_agnostic_with_optional_app_examples(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -113,7 +121,9 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("Terminal & SSH", installer)
         self.assertNotIn("Advanced SSH & Web Terminal", installer)
 
-    def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(self):
+    def test_beginner_diagrams_and_actual_interface_screens_are_linked_and_present(
+        self,
+    ):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for relative_path in (
             "docs/images/connection-overview.svg",
@@ -168,22 +178,27 @@ class PackageTests(unittest.TestCase):
         self.assertIn('f"ws://homeassistant:{upstream_port}"', main)
         self.assertIn("charge_point_id: central", config)
 
-    def test_one_command_installer_and_timing_script_are_included(self):
+    def test_installer_enables_automatic_verified_timing(self):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        config = (ROOT / "config.yaml").read_text(encoding="utf-8")
+        main = (ROOT / "proxy" / "main.py").read_text(encoding="utf-8")
         timing = (ROOT / "ha-timing-script.yaml").read_text(encoding="utf-8")
         guide = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("CHARGER_IP", installer)
         self.assertIn("HOME_ASSISTANT_IP", installer)
+        self.assertIn("device_id=config.charge_point_id", main)
         self.assertIn("ha apps install", installer)
         self.assertIn("ha apps start", installer)
         self.assertIn("HeartbeatInterval", timing)
         self.assertIn("WebSocketPingInterval", timing)
         self.assertIn("MeterValueSampleInterval", timing)
         self.assertIn("uninstall.sh", guide)
-        self.assertIn("required manual post-install step", guide.lower())
+        self.assertIn("automatic post-connect charger timing", guide.lower())
         self.assertIn("connection-critical", guide.lower())
         self.assertIn("telemetry frequency", guide.lower())
-        self.assertIn("required manual charger timing", installer.lower())
+        self.assertIn("automatic charger timing", installer.lower())
+        self.assertIn("homeassistant_api: true", config)
+        self.assertNotIn("required manual post-install step", guide.lower())
 
     def test_uninstaller_is_included_and_does_not_touch_the_ocpp_backend(self):
         uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")

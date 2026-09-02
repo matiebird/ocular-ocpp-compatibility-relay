@@ -2,7 +2,7 @@
 
 This guide records field-tested OCPP behaviour from an Ocular LTE Plus V3 / BS-EV07 running firmware `405.3251.0Q03196`. Treat the current thresholds and reset behaviour as a starting point, then verify them against your own charger and vehicle.
 
-The compatibility relay in this repository provides a workaround for the observed WebSocket connection problem. It does not generate any of the OCPP commands described below. Implement these rules in your OCPP central system or Home Assistant automations.
+The compatibility relay in this repository provides a workaround for the observed WebSocket connection problem and automatically applies and verifies the three documented charger timing values. It does not generate charging-profile, transaction-control or reset commands described below. Implement those rules in your OCPP central system or Home Assistant automations.
 
 ## Keep temporary hold separate from final stop
 
@@ -113,7 +113,7 @@ Use OCPP heartbeat freshness, connector status, transaction ID, charge-control s
 The connection problem and command problem are separate:
 
 - The compatibility relay handles the charger-facing WebSocket behaviour and opens a clean second WebSocket session to Home Assistant.
-- The timing script sets and reads back heartbeat, WebSocket ping and meter intervals.
+- The relay automatically applies and verifies heartbeat, WebSocket ping and meter intervals after each upstream connection.
 - The control rules above handle transactions, delayed replies, taper completion and exceptional recovery.
 
-After any reset or power cycle, rerun the supplied timing script and confirm its readback. On the tested firmware, Soft Reset could restore `HeartbeatInterval` to `3600` while leaving `WebSocketPingInterval` at `60`.
+After any reset or power cycle, confirm that the reconnect log contains `timing_verified`. On the tested firmware, Soft Reset could restore `HeartbeatInterval` to `3600` while leaving `WebSocketPingInterval` at `60`. Use the supplied timing script only as a manual fallback if automatic verification fails.

@@ -17,7 +17,7 @@ Ocular charger
 
 The relay uses Python `websockets==12.0` for the charger-facing connection and opens a separate connection to Home Assistant. It does not translate OCPP or change charging commands. Both sides still use WebSocket RFC 6455 and OCPP 1.6J.
 
-The existing Home Assistant OCPP listener stays where it is. The installer does not edit `.storage`, Home Assistant's OCPP integration, automations, scripts or charger controls.
+The existing Home Assistant OCPP listener stays where it is. The installer does not edit `.storage`, Home Assistant's OCPP integration, automations or scripts. After a charger connection, the relay uses Home Assistant's OCPP services only to apply and verify the required charger timing values.
 
 ## Requirements
 
@@ -173,11 +173,11 @@ If you do not see `connection_open`, do not keep changing settings at random. Ch
 
 Do not treat one successful command after reboot as proof. Leave it connected for a few minutes and try `ocpp.get_configuration` more than once before relying on it.
 
-## Required manual post-install charger timing
+## Automatic post-connect charger timing
 
-For the tested Ocular LTE Plus V3 firmware, this is a required manual post-install step. Apply it after the charger has connected. The relay terminates WebSocket control pings locally, so they do not become OCPP application traffic between the charger and Home Assistant.
+For the tested Ocular LTE Plus V3 firmware, these values are required. After each upstream charger connection, the relay waits for Home Assistant OCPP to finish establishing the charger, applies all three settings and reads them back automatically. Timing work runs separately from charger traffic and does not block the WebSocket relay. The relay terminates WebSocket control pings locally, so they do not become OCPP application traffic between the charger and Home Assistant.
 
-The supplied `ha-timing-script.yaml` sets and reads back:
+The relay sets and reads back:
 
 ```text
 HeartbeatInterval = 60
@@ -192,16 +192,11 @@ WebSocket keepalive traffic, which the relay answers locally.
 and power updates but is not the setting that prevents an otherwise idle OCPP
 session.
 
-Paste it into a Home Assistant script. Change this line if your OCPP device ID is not `ocular`:
+The relay addresses Home Assistant OCPP with the configured charger ID. The integration accepts either its Home Assistant charger identifier or the charger's OCPP identifier, so no separate device ID is required.
 
-```yaml
-ocpp_device_id: ocular
-```
+Successful application is recorded in the app log as `timing_verified` with readback values `60`, `60` and `10`. The relay retries transient failures for up to several minutes without interrupting charging. It runs the process again after every reconnect because the tested firmware may reset `HeartbeatInterval` to `3600` after a Soft Reset or power cycle.
 
-Run the script only after the charger is connected. Its final notification must
-read back `60`, `60` and `10`; applying the service calls without this readback
-is not verification. Run it again after a Soft Reset or power cycle because the
-tested firmware may reset `HeartbeatInterval` to `3600`.
+The supplied `ha-timing-script.yaml` remains available as a manual fallback if automatic verification reports `timing_verification_failed`. If Home Assistant API access is unavailable, the app logs `timing_disabled` but keeps relaying charger traffic.
 
 ## Everyday Home Assistant controls
 
@@ -270,10 +265,11 @@ The app:
 - accepts only the configured charger IP;
 - accepts only the configured path and `ocpp1.6` subprotocol;
 - runs without host networking, privileges or full Home Assistant access;
+- receives a Home Assistant API token; the relay code restricts its use to the documented OCPP timing services;
 - drops Linux privileges inside the container;
 - limits queues, handshake buffers and complete application-message size;
 - does not log OCPP frames, credentials or WebSocket keys;
-- does not generate OCPP commands.
+- generates only the three documented timing configuration commands and their readbacks; charging profiles, transaction controls and resets remain outside the relay.
 
 ## Optional support
 

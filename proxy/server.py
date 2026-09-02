@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
@@ -10,7 +11,6 @@ from typing import Any
 
 import websockets
 from websockets.legacy.server import WebSocketServerProtocol
-
 
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 OCPP_SUBPROTOCOL = "ocpp1.6"
@@ -80,20 +80,32 @@ class GuardedServerProtocol(WebSocketServerProtocol):
 
     @staticmethod
     def _rejection(status: HTTPStatus, body: bytes):
-        return status, [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))], body
+        return (
+            status,
+            [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))],
+            body,
+        )
 
 
 class OcppWebSocketRelay:
     """Terminate charger WebSockets and relay only application messages to HA."""
 
-    def __init__(self, config: RelayConfig) -> None:
+    def __init__(
+        self,
+        config: RelayConfig,
+        on_upstream_connected: Callable[[], Awaitable[object]] | None = None,
+    ) -> None:
         self.config = config
+        self.on_upstream_connected = on_upstream_connected
         self.server = None
         self._stopping = False
+        self._background_tasks: set[asyncio.Task] = set()
+        self._timing_pending = False
         self.counters: Counter[str] = Counter()
 
     async def start(self):
         self._stopping = False
+        self._timing_pending = False
         self.server = await websockets.serve(
             self._handle_charger,
             self.config.listen_host,
@@ -111,11 +123,40 @@ class OcppWebSocketRelay:
         return self.server
 
     async def stop(self) -> None:
+        self._timing_pending = False
         if self.server is not None:
             self._stopping = True
             self.server.close()
             await self.server.wait_closed()
             self.server = None
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
+    def _start_timing(self) -> None:
+        if self.on_upstream_connected is None:
+            return
+        if self._background_tasks:
+            self.counters["timing_coalesced"] += 1
+            self._timing_pending = True
+            return
+        self.counters["timing_attempts"] += 1
+        task = asyncio.create_task(self.on_upstream_connected())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._timing_done)
+
+    def _timing_done(self, task: asyncio.Task) -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            LOGGER.error("timing_task_failed error_type=%s", type(error).__name__)
+        if self._timing_pending and not self._stopping:
+            self._timing_pending = False
+            self._start_timing()
 
     async def _handle_charger(self, charger, path: str) -> None:
         source = self._source(charger)
@@ -127,7 +168,9 @@ class OcppWebSocketRelay:
 
         self.counters["accepted_connections"] += 1
         LOGGER.info("connection_open source=%s", source)
-        upstream_url = f"{self.config.upstream_base.rstrip('/')}{self.config.upstream_path}"
+        upstream_url = (
+            f"{self.config.upstream_base.rstrip('/')}{self.config.upstream_path}"
+        )
         try:
             async with websockets.connect(
                 upstream_url,
@@ -143,6 +186,7 @@ class OcppWebSocketRelay:
                 if upstream.subprotocol != OCPP_SUBPROTOCOL:
                     raise RuntimeError("upstream rejected ocpp1.6 subprotocol")
                 self.counters["upstream_connections"] += 1
+                self._start_timing()
                 termination = await self._bridge(charger, upstream)
         except asyncio.CancelledError:
             termination = BridgeTermination("relay_shutdown", None)
@@ -243,7 +287,9 @@ class OcppWebSocketRelay:
         async for message in source:
             if self._message_size(message) > self.config.max_message_bytes:
                 self.counters["oversized_messages"] += 1
-                LOGGER.warning("message_rejected reason=size direction=%s", counter_name)
+                LOGGER.warning(
+                    "message_rejected reason=size direction=%s", counter_name
+                )
                 oversized_message.set()
                 await asyncio.gather(
                     charger.close(code=1009, reason="message too large"),
@@ -257,7 +303,9 @@ class OcppWebSocketRelay:
 
     @staticmethod
     def _message_size(message: str | bytes) -> int:
-        return len(message) if isinstance(message, bytes) else len(message.encode("utf-8"))
+        return (
+            len(message) if isinstance(message, bytes) else len(message.encode("utf-8"))
+        )
 
     @staticmethod
     def _source(websocket) -> str:

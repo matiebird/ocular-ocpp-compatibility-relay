@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8
+
+- Apply the required Ocular timing values automatically after each charger connection.
+- Verify `HeartbeatInterval=60`, `WebSocketPingInterval=60` and `MeterValueSampleInterval=10` through Home Assistant OCPP service readback.
+- Retry bounded transient failures without blocking charger traffic, coalesce reconnect timing jobs, and retain the YAML timing script as a manual fallback.
+- Keep charger traffic available if Home Assistant API access is unavailable, with an explicit timing-disabled error.
+
 ## 0.3.7
 
 - Refresh the Home Assistant app store correctly during install, rollback and removal.

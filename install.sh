@@ -80,7 +80,7 @@ command -v ha >/dev/null || {
   printf '/addons is unavailable. This package requires Home Assistant OS or Supervised.\n' >&2
   exit 2
 }
-for required in config.yaml Dockerfile README.md CHARGER_CONTROL_WORKAROUNDS.md examples/README.md examples/ocular-everyday-controls.yaml examples/ocular-dashboard-card.yaml docs/images/connection-overview.svg docs/images/ocular-settings-reference.svg proxy/main.py proxy/server.py tests/test_server.py; do
+for required in config.yaml Dockerfile README.md CHARGER_CONTROL_WORKAROUNDS.md examples/README.md examples/ocular-everyday-controls.yaml examples/ocular-dashboard-card.yaml docs/images/connection-overview.svg docs/images/ocular-settings-reference.svg proxy/main.py proxy/server.py proxy/timing.py tests/test_server.py tests/test_timing.py; do
   [[ -f "$SOURCE_DIR/$required" ]] || { printf 'Package is incomplete: missing %s\n' "$required" >&2; exit 2; }
 done
 
@@ -184,9 +184,10 @@ Verify after the charger connects:
 
 Look for "connection_open" without a repeating "upstream_failure".
 
-Required manual charger timing:
-  Paste $SOURCE_DIR/ha-timing-script.yaml into a Home Assistant script and run
-  it after the charger connects. Confirm the notification reads back 60, 60
-  and 10. Repeat after a reset or power cycle if the values do not persist.
+Automatic charger timing:
+  After each charger connection, the relay applies HeartbeatInterval=60,
+  WebSocketPingInterval=60 and MeterValueSampleInterval=10 through Home
+  Assistant OCPP, then reads all three back. Look for "timing_verified".
+  OCPP device ID: $CHARGE_POINT_ID
 Any previous source backup is outside /addons at $BACKUP_ROOT so Supervisor cannot mistake it for another local app.
 EOF

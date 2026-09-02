@@ -211,36 +211,6 @@ script:
                 current and Finishing or Available were not all confirmed within
                 90 seconds. Check the live charger state before issuing another command.
 
-  ocular_apply_stable_timing:
-    alias: Ocular — apply stable connection timing
-    icon: mdi:timer-cog
-    mode: single
-    sequence:
-      - action: ocpp.configure
-        data:
-          devid: ocular
-          ocpp_key: HeartbeatInterval
-          value: "60"
-      - delay: "00:00:02"
-      - action: ocpp.configure
-        data:
-          devid: ocular
-          ocpp_key: WebSocketPingInterval
-          value: "60"
-      - delay: "00:00:02"
-      - action: ocpp.configure
-        data:
-          devid: ocular
-          ocpp_key: MeterValueSampleInterval
-          value: "10"
-      - action: persistent_notification.create
-        data:
-          title: Ocular timing sent
-          message: >-
-            Requested heartbeat 60 seconds, WebSocket ping 60 seconds and meter
-            reporting 10 seconds. Use the supplied timing readback script if you need
-            to verify each stored value.
-
 automation:
   - id: ocular_terminal_taper_finish_example
     alias: Ocular — finish after sustained terminal taper

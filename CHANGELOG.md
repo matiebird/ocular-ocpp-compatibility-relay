@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.10
+
+- Stop cleanly on SIGTERM/SIGINT so app stop and restart close charger sessions with a WebSocket close frame instead of waiting for the container kill timeout, and log `relay_shutdown` for those closures.
+- Use the Supervisor default init so container signals reach the relay process.
+- Attribute a charger dropping mid-forward to `charger_close` rather than `upstream_failure` in connection diagnostics.
+- Reject `.` and `..` path segments in `expected_paths` and `upstream_path`.
+- Accept the charger's configured ID by default (`charge_point_id: auto`): any well-formed charger path is forwarded to Home Assistant unchanged and its last segment is used for automatic timing. Pass an ID to the installer to pin the relay to a single charger path as before.
+- Fill a pinned charge-point ID into the installed fallback timing script and example package, which now default to `central` like the previous app option.
+- Accept CIDR networks in `allowed_sources` and as the installer's `CHARGER_IP`, no broader than /16 (IPv4) or /64 (IPv6), so a DHCP change or a second charger on the LAN does not lock the charger out.
+- Queue automatic timing per charger ID so overlapping reconnects from several chargers each get their timing run.
+- Replace a stale session when the same charger reconnects with the same ID from the same address (`session_superseded`), and refuse the same ID from a different address with HTTP 409 (`rejected_duplicate_id`).
+
 ## 0.3.9
 
 - Normalize dropped HTTP connections and malformed response encoding into bounded timing retries.

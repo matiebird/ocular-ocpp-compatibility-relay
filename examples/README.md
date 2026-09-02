@@ -33,7 +33,7 @@ Error Code Connector
 Heartbeat
 ```
 
-The supplied example assumes a charge-point ID of `ocular`, which normally creates:
+The supplied example assumes a Home Assistant charger identifier of `ocular`, which normally creates:
 
 ```text
 switch.ocular_charge_control
@@ -68,7 +68,7 @@ If `Current Import` or `Power Active Import` is missing, open the OCPP integrati
 
    Do not create a second `homeassistant:` section. If one already exists, add only the `packages:` line beneath it.
 
-3. In the copied package, replace `ocular` entity IDs and `devid: ocular` if your charge-point ID differs.
+3. In the copied package, replace the `ocular` entity IDs if your Home Assistant charger identifier differs. The `devid` values are the OCPP charge-point ID: replace `devid: central` with the ID shown as `charge_point_id=` in the relay log, unless you pinned an ID with the installer, in which case the installed copy under `/addons/ocular_ocpp_compatibility_relay/examples` already carries it.
 
 4. Set the `input_number.ocular_charge_current` maximum no higher than the lowest commissioned limit of the charger, circuit, cable, vehicle and site. The example shows the charger's supported **6 A** to **32 A** range; a lower installation limit must remain lower.
 

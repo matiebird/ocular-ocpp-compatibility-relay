@@ -3,7 +3,13 @@ set -Eeuo pipefail
 
 # Install from an SSH session on the Home Assistant host.
 # Usage: bash install.sh CHARGER_IP HOME_ASSISTANT_IP [CHARGE_POINT_ID] [HA_OCPP_PORT]
-# Example: bash install.sh 192.168.1.50 192.168.1.10 central 9000
+# Example: bash install.sh 192.168.1.50 192.168.1.10
+# CHARGER_IP may also be a CIDR network such as 192.168.1.0/24 (no broader
+# than /16) so the relay keeps accepting the charger after a DHCP change or
+# admits several chargers on the same LAN.
+# CHARGE_POINT_ID defaults to "auto": the relay accepts the ID already
+# configured in the charger and forwards its path unchanged. Give an explicit
+# ID only to pin the relay to that single charger identity.
 
 if [[ $# -lt 2 || $# -gt 4 ]]; then
   printf 'Usage: %s CHARGER_IP HOME_ASSISTANT_IP [CHARGE_POINT_ID] [HA_OCPP_PORT]\n' "$0" >&2
@@ -12,7 +18,7 @@ fi
 
 CHARGER_IP="$1"
 HOME_ASSISTANT_IP="$2"
-CHARGE_POINT_ID="${3:-central}"
+CHARGE_POINT_ID="${3:-auto}"
 HA_OCPP_PORT="${4:-9000}"
 EXPECTED_PATH="/${CHARGE_POINT_ID}/${CHARGE_POINT_ID}"
 SLUG="local_ocular_ocpp_compatibility_relay"
@@ -62,10 +68,32 @@ is_ipv4() {
   done
 }
 
-is_ipv4 "$CHARGER_IP" || { printf 'Invalid charger IPv4 address: %s\n' "$CHARGER_IP" >&2; exit 2; }
+is_ipv4_or_network() {
+  local value="$1" ip prefix
+  local -a parts
+  if [[ "$value" == */* ]]; then
+    ip="${value%%/*}"
+    prefix="${value#*/}"
+    [[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+    (( 10#$prefix >= 16 && 10#$prefix <= 32 )) || return 1
+    is_ipv4 "$ip" || return 1
+    IFS=. read -r -a parts <<<"$ip"
+    local address=$(( (10#${parts[0]} << 24) | (10#${parts[1]} << 16) | (10#${parts[2]} << 8) | 10#${parts[3]} ))
+    local host_bits=$(( 32 - 10#$prefix ))
+    # Host bits must be zero: 192.168.1.0/24 is a network, 192.168.1.5/24 is not.
+    (( (address & ((1 << host_bits) - 1)) == 0 )) || return 1
+    return 0
+  fi
+  is_ipv4 "$value"
+}
+
+is_ipv4_or_network "$CHARGER_IP" || {
+  printf 'Invalid charger address: %s (use an IPv4 address or a CIDR network such as 192.168.1.0/24, no broader than /16)\n' "$CHARGER_IP" >&2
+  exit 2
+}
 is_ipv4 "$HOME_ASSISTANT_IP" || { printf 'Invalid Home Assistant IPv4 address: %s\n' "$HOME_ASSISTANT_IP" >&2; exit 2; }
 [[ "$CHARGE_POINT_ID" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || {
-  printf 'CHARGE_POINT_ID may contain only letters, numbers, dot, underscore and dash.\n' >&2
+  printf 'CHARGE_POINT_ID may be "auto" or contain only letters, numbers, dot, underscore and dash.\n' >&2
   exit 2
 }
 [[ "$HA_OCPP_PORT" =~ ^[0-9]+$ ]] && (( HA_OCPP_PORT >= 1 && HA_OCPP_PORT <= 65535 )) || {
@@ -130,11 +158,25 @@ cp -a \
   "$TARGET_DIR/"
 
 sed -i \
-  -e "s/\"192.168.1.50\"/\"$CHARGER_IP\"/" \
-  -e "s#/central/central#$EXPECTED_PATH#g" \
-  -e "s/charge_point_id: central/charge_point_id: $CHARGE_POINT_ID/g" \
-  -e "s/upstream_port: 9000/upstream_port: $HA_OCPP_PORT/g" \
+  -e "s#\"192.168.1.50\"#\"$CHARGER_IP\"#" \
+  -e "s/^  upstream_port: 9000$/  upstream_port: $HA_OCPP_PORT/" \
   "$TARGET_DIR/config.yaml"
+
+if [[ "$CHARGE_POINT_ID" != auto ]]; then
+  # Pin the relay to one charger identity and pre-fill the fallback script and
+  # example package with the same ID.
+  sed -i \
+    -e "s#^  expected_paths: \[\]#  expected_paths: [\"$EXPECTED_PATH\"]#" \
+    -e "s#^  upstream_path: \"\"#  upstream_path: $EXPECTED_PATH#" \
+    -e "s/^  charge_point_id: auto$/  charge_point_id: $CHARGE_POINT_ID/" \
+    "$TARGET_DIR/config.yaml"
+  sed -i \
+    -e "s/^  ocpp_device_id: central$/  ocpp_device_id: $CHARGE_POINT_ID/" \
+    "$TARGET_DIR/ha-timing-script.yaml"
+  sed -i \
+    -e "s/^\([[:space:]]*\)devid: central$/\1devid: $CHARGE_POINT_ID/" \
+    "$TARGET_DIR/examples/ocular-everyday-controls.yaml"
+fi
 
 ha store reload
 ha apps install "$SLUG"
@@ -165,6 +207,39 @@ trap - ERR
 printf '\nInstalled relay status:\n'
 ha apps info "$SLUG"
 
+if [[ "$CHARGE_POINT_ID" == auto ]]; then
+cat <<EOF
+
+The relay is installed and starts automatically.
+
+Now set the charger in OCPPSetTool, keeping the Charger ID it already uses:
+  Protocol: WS
+  Server:   $HOME_ASSISTANT_IP:19000/CHARGER_ID   (CHARGER_ID = its existing Charger ID)
+  Charger ID: unchanged
+  Authentication: blank, unless you configured it yourself
+  Mode: Online (set this last)
+
+The relay accepts the charger's configured ID, forwards its path unchanged to
+Home Assistant OCPP on port $HA_OCPP_PORT, and shows the ID it learned as
+"charge_point_id=" on each "connection_open" log line.
+Home Assistant OCPP was not moved or edited.
+
+Verify after the charger connects:
+  ha apps logs $SLUG
+
+Look for "connection_open" without a repeating "upstream_failure".
+
+Automatic charger timing:
+  After each charger connection, the relay applies HeartbeatInterval=60,
+  WebSocketPingInterval=60 and MeterValueSampleInterval=10 through Home
+  Assistant OCPP for the learned ID, then reads all three back. Look for
+  "timing_verified".
+  If you use the manual fallback $TARGET_DIR/ha-timing-script.yaml or the
+  example package in $TARGET_DIR/examples, set their device ID to the
+  learned charge_point_id (they default to "central").
+Any previous source backup is outside /addons at $BACKUP_ROOT so Supervisor cannot mistake it for another local app.
+EOF
+else
 cat <<EOF
 
 The relay is installed and starts automatically.
@@ -176,7 +251,7 @@ Now set the charger in OCPPSetTool:
   Authentication: blank, unless you configured it yourself
   Mode: Online (set this last)
 
-The resulting charger path is $EXPECTED_PATH.
+The relay is pinned to charger path $EXPECTED_PATH.
 Home Assistant OCPP stays on port $HA_OCPP_PORT; it was not moved or edited.
 
 Verify after the charger connects:
@@ -189,5 +264,8 @@ Automatic charger timing:
   WebSocketPingInterval=60 and MeterValueSampleInterval=10 through Home
   Assistant OCPP, then reads all three back. Look for "timing_verified".
   OCPP device ID: $CHARGE_POINT_ID
+  The manual fallback $TARGET_DIR/ha-timing-script.yaml and the example
+  package in $TARGET_DIR/examples already use this ID.
 Any previous source backup is outside /addons at $BACKUP_ROOT so Supervisor cannot mistake it for another local app.
 EOF
+fi

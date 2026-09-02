@@ -2,7 +2,10 @@
 #
 # Copy this file to /config/packages/ocular_everyday_controls.yaml only after
 # completing examples/README.md. The entity IDs below assume the Home Assistant
-# OCPP charge-point ID is "ocular" and the charger has one connector.
+# charger identifier is "ocular" and the charger has one connector. The devid
+# values address the charger by its OCPP charge-point ID: replace "central"
+# with the charge_point_id shown in the relay log, unless you pinned an ID with
+# the installer, which fills it in for you.
 #
 # This package deliberately contains no solar, tariff, battery or reset policy.
 # Automatic terminal-taper stopping is OFF until the user enables its helper.
@@ -85,7 +88,7 @@ script:
              and transaction_id | int(-1) > 0 }}
       - action: ocpp.set_charge_rate
         data:
-          devid: ocular
+          devid: central
           conn_id: 1
           custom_profile: >-
             {{ {
@@ -138,7 +141,7 @@ script:
             sequence:
               - action: ocpp.set_charge_rate
                 data:
-                  devid: ocular
+                  devid: central
                   conn_id: 1
                   custom_profile: >-
                     {{ {

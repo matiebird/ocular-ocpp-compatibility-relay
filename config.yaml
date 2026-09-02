@@ -1,12 +1,12 @@
 name: Ocular OCPP Compatibility Relay
-version: "0.3.9"
+version: "0.3.10"
 slug: ocular_ocpp_compatibility_relay
 description: Charger-compatible WebSocket relay for Ocular LTE Plus V3 OCPP dropouts
 url: "https://github.com/matiebird/ocular-ocpp-compatibility-relay"
 arch:
   - aarch64
   - amd64
-init: false
+init: true
 startup: services
 boot: auto
 host_network: false
@@ -21,10 +21,9 @@ map: []
 options:
   allowed_sources:
     - "192.168.1.50"
-  expected_paths:
-    - /central/central
-  upstream_path: /central/central
-  charge_point_id: central
+  expected_paths: []
+  upstream_path: ""
+  charge_point_id: auto
   upstream_port: 9000
   max_message_bytes: 65536
   log_level: info
@@ -32,8 +31,8 @@ schema:
   allowed_sources:
     - str
   expected_paths:
-    - str
-  upstream_path: str
+    - str?
+  upstream_path: str?
   charge_point_id: str
   upstream_port: port
   max_message_bytes: int

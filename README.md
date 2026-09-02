@@ -83,16 +83,20 @@ Example:
 bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10
 ```
 
+`CHARGER_IP` may also be a LAN network such as `192.168.1.0/24`; see below.
+
 The defaults are:
 
 ```text
-Charger ID: central
+Charger ID: auto — the relay accepts the ID already configured in the charger
 Home Assistant OCPP port: 9000
 Relay port: 19000
-Expected path: /central/central
+Charger path: forwarded to Home Assistant unchanged
 ```
 
-If your charger ID or Home Assistant OCPP port is different:
+With the default `auto` charger ID, the relay learns the charger's configured OCPP identity from the path it connects with, forwards that path unchanged to Home Assistant OCPP, and uses the learned ID for automatic timing. You keep whatever Charger ID the charger already has. The learned ID appears as `charge_point_id=` on each `connection_open` log line.
+
+To pin the relay to one charger ID, or if the Home Assistant OCPP port is different:
 
 ```bash
 bash /config/ocular-ocpp-easy-deploy/install.sh CHARGER_IP HOME_ASSISTANT_IP CHARGE_POINT_ID HA_OCPP_PORT
@@ -104,19 +108,31 @@ Example:
 bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10 driveway 9000
 ```
 
+A pinned relay accepts only the path `/CHARGE_POINT_ID/CHARGE_POINT_ID` and rejects every other charger path. Pass `auto` as the charger ID to keep learning it while changing the port.
+
+#### Charger address changes and multiple chargers
+
+`CHARGER_IP` may be a single address or a CIDR network such as `192.168.1.0/24`. A network keeps the relay accepting the charger after a DHCP address change and admits several chargers on the same LAN. Networks broader than `/16` (IPv4) or `/64` (IPv6) are refused, so the allowlist can never become "everyone". The same rule applies to `allowed_sources` in the app options, which accepts up to 16 addresses or networks.
+
+With the default `auto` charger ID, multiple chargers each keep their own ID and are forwarded to Home Assistant separately, provided your Home Assistant OCPP integration version supports more than one charge point. Automatic timing is queued per charger ID, so a reconnect during another charger's timing job is never dropped.
+
+Two sessions with the same charger ID are handled by source address. A second session from the **same** address is the charger reconnecting after a dropout: the relay closes the stale session (logged as `session_superseded` and `cause=superseded`) and serves the new one immediately, rather than locking the charger out until TCP notices the old session is dead. A second session from a **different** address is refused with HTTP 409 and logged as `opening_rejected reason=duplicate_id`, so two chargers cannot fight over one identity.
+
 The installer checks the IP addresses and existing OCPP listener, backs up an older relay outside Supervisor's `/addons` scan tree, installs the local app, verifies that it is started and listening, and prints the exact charger settings. If a reinstall fails after removing the previous version, it automatically attempts to restore and restart that version.
 
 ### 3. Change the charger endpoint
 
-For the default `central` ID, set OCPPSetTool to:
+Set OCPPSetTool to the following, where `CHARGER_ID` is the Charger ID already configured in the charger (or the ID you pinned with the installer):
 
 ```text
 Protocol: WS
-Server: HOME_ASSISTANT_IP:19000/central
-Charger ID: central
+Server: HOME_ASSISTANT_IP:19000/CHARGER_ID
+Charger ID: CHARGER_ID (unchanged)
 Authentication: blank, unless you configured it yourself
 Mode: Online
 ```
+
+For example, a charger with the ID `central` uses `HOME_ASSISTANT_IP:19000/central`.
 
 Save the server and charger ID before setting Online mode.
 
@@ -171,7 +187,7 @@ If you do not see `connection_open`, do not keep changing settings at random. Ch
 - the charger address entered in the installer matches the charger in your router;
 - the Home Assistant address entered in OCPPSetTool is correct;
 - the server uses port `19000` and has no `ws://` prefix;
-- the charger ID and path match the values printed by the installer;
+- the charger ID and path match the values printed by the installer (with the default `auto` ID, any well-formed charger path is accepted);
 - the compatibility relay app is started.
 
 Do not treat one successful command after reboot as proof. Leave it connected for a few minutes and try `ocpp.get_configuration` more than once before relying on it.
@@ -195,11 +211,11 @@ WebSocket keepalive traffic, which the relay answers locally.
 and power updates but is not the setting that prevents an otherwise idle OCPP
 session.
 
-The relay addresses Home Assistant OCPP with the configured charger ID. The integration accepts either its Home Assistant charger identifier or the charger's OCPP identifier, so no separate device ID is required.
+The relay addresses Home Assistant OCPP with the charger ID learned from each connection, or the pinned ID if you gave one to the installer. The integration accepts either its Home Assistant charger identifier or the charger's OCPP identifier, so no separate device ID is required.
 
 Successful application is recorded in the app log as `timing_verified` with readback values `60`, `60` and `10`. The relay retries transient failures for up to several minutes without interrupting charging. It runs the process again after every reconnect because the tested firmware may reset `HeartbeatInterval` to `3600` after a Soft Reset or power cycle.
 
-The supplied `ha-timing-script.yaml` remains available as a manual fallback if automatic verification reports `timing_verification_failed`. If Home Assistant API access is unavailable, the app logs `timing_disabled` but keeps relaying charger traffic.
+The supplied `ha-timing-script.yaml` remains available as a manual fallback if automatic verification reports `timing_verification_failed`. If you pinned a charger ID with the installer, the installed copy already carries it; otherwise set `ocpp_device_id` to the ID shown as `charge_point_id=` in the app log. If Home Assistant API access is unavailable, the app logs `timing_disabled` but keeps relaying charger traffic.
 
 ## Everyday Home Assistant controls
 

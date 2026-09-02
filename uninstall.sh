@@ -10,7 +10,7 @@ if [[ $# -lt 1 || $# -gt 3 ]]; then
 fi
 
 HOME_ASSISTANT_IP="$1"
-CHARGE_POINT_ID="${2:-central}"
+CHARGE_POINT_ID="${2:-CHARGER_ID}"
 HA_OCPP_PORT="${3:-9000}"
 SLUG="local_ocular_ocpp_compatibility_relay"
 TARGET_DIR="/addons/ocular_ocpp_compatibility_relay"
@@ -28,7 +28,7 @@ The compatibility relay has been removed.
 To return to a direct connection, set the charger to:
   Protocol: WS
   Server:   $HOME_ASSISTANT_IP:$HA_OCPP_PORT/$CHARGE_POINT_ID
-  Charger ID: $CHARGE_POINT_ID
+  Charger ID: $CHARGE_POINT_ID (keep the ID the charger already uses)
   Authentication: blank, unless you configured it yourself
   Mode: Online
 

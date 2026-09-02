@@ -56,6 +56,10 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "max_message_bytes": 1024,
         }
         values.update(overrides)
+        if values.pop("learn_charge_point_id", False):
+            values.update(
+                upstream_path=None, charge_point_id=None, expected_paths=()
+            )
         on_upstream_connected = values.pop("on_upstream_connected", None)
         relay = OcppWebSocketRelay(
             RelayConfig(**values), on_upstream_connected=on_upstream_connected
@@ -98,9 +102,10 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         release_timing = asyncio.Event()
         timing_calls = 0
 
-        async def apply_timing():
+        async def apply_timing(charge_point_id):
             nonlocal timing_calls
             timing_calls += 1
+            self.assertEqual(charge_point_id, "central")
             if timing_calls == 1:
                 timing_started.set()
                 await release_timing.wait()
@@ -110,7 +115,7 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         relay, port = await self.start_relay(on_upstream_connected=apply_timing)
         async with self.connect(port) as charger:
             await asyncio.wait_for(timing_started.wait(), 1)
-            relay._start_timing()
+            relay._start_timing("central")
             await charger.send("hello")
             self.assertEqual(await charger.recv(), "upstream:hello")
             release_timing.set()
@@ -119,7 +124,7 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(relay.counters["timing_coalesced"], 1)
 
     async def test_timing_failure_is_logged_without_interrupting_relay(self):
-        async def apply_timing():
+        async def apply_timing(charge_point_id):
             raise RuntimeError("timing failed")
 
         logger = logging.getLogger("ocular_ocpp_websocket_proxy")
@@ -138,6 +143,56 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await charger.send("hello")
             await charger.recv()
         self.assertEqual(self.upstream_paths, ["/ha/central"])
+
+    async def test_learned_charge_point_id_forwards_path_unchanged(self):
+        timing_ids = []
+        timing_done = asyncio.Event()
+
+        async def apply_timing(charge_point_id):
+            timing_ids.append(charge_point_id)
+            timing_done.set()
+
+        relay, port = await self.start_relay(
+            learn_charge_point_id=True, on_upstream_connected=apply_timing
+        )
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            async with self.connect(port, path="/site/Driveway_01") as charger:
+                await charger.send("hello")
+                self.assertEqual(await charger.recv(), "upstream:hello")
+                await asyncio.wait_for(timing_done.wait(), 1)
+            await asyncio.sleep(0.05)
+        self.assertEqual(self.upstream_paths, ["/site/Driveway_01"])
+        self.assertEqual(timing_ids, ["Driveway_01"])
+        self.assertIn("connection_open", "\n".join(captured.output))
+        self.assertIn("charge_point_id=Driveway_01", "\n".join(captured.output))
+        self.assertEqual(relay.counters["rejected_path"], 0)
+
+    async def test_learned_charge_point_id_accepts_single_segment_path(self):
+        _, port = await self.start_relay(learn_charge_point_id=True)
+        async with self.connect(port, path="/cp-7") as charger:
+            await charger.send("hello")
+            await charger.recv()
+        self.assertEqual(self.upstream_paths, ["/cp-7"])
+
+    async def test_learned_charge_point_id_still_rejects_unsafe_paths(self):
+        relay, port = await self.start_relay(learn_charge_point_id=True)
+        for path in (
+            "/site/..",
+            "/site/./cp",
+            "//cp",
+            "/site/",
+            "/site/cp?token=x",
+            "/site/bad%20id",
+            "/site/" + "x" * 65,
+            "/" + "a/" * 130 + "cp",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises((InvalidStatusCode, ConnectionClosedError)):
+                    async with self.connect(port, path=path):
+                        pass
+        self.assertEqual(relay.counters["rejected_path"], 8)
+        self.assertEqual(self.upstream_connections, [])
 
     async def test_source_path_and_subprotocol_rejections_fail_closed(self):
         relay, port = await self.start_relay(allowed_sources=("192.0.2.1",))
@@ -415,6 +470,46 @@ class BridgeCauseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(termination.cause, "upstream_failure")
         self.assertEqual(charger.close_code, 1011)
         self.assertEqual(relay.counters["upstream_failures"], 1)
+
+
+class RelayConfigTests(unittest.TestCase):
+    def test_pinned_and_learned_modes_are_mutually_exclusive(self):
+        common = dict(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            upstream_base="ws://127.0.0.1:1",
+            allowed_sources=("127.0.0.1",),
+            max_message_bytes=1024,
+        )
+        with self.assertRaises(ValueError):
+            RelayConfig(
+                **common,
+                upstream_path=None,
+                charge_point_id=None,
+                expected_paths=("/central/central",),
+            )
+        with self.assertRaises(ValueError):
+            RelayConfig(
+                **common,
+                upstream_path="/central/central",
+                charge_point_id="central",
+                expected_paths=(),
+            )
+        learned = RelayConfig(
+            **common, upstream_path=None, charge_point_id=None, expected_paths=()
+        )
+        self.assertTrue(learned.learns_charge_point_id)
+        self.assertEqual(learned.resolve("/a/b"), ("/a/b", "b"))
+        self.assertIsNone(learned.resolve("/a/b/"))
+        pinned = RelayConfig(
+            **common,
+            upstream_path="/ha/central",
+            charge_point_id="central",
+            expected_paths=("/central/central",),
+        )
+        self.assertFalse(pinned.learns_charge_point_id)
+        self.assertEqual(pinned.resolve("/central/central"), ("/ha/central", "central"))
+        self.assertIsNone(pinned.resolve("/other/other"))
 
 
 class ServerConfigurationTests(unittest.IsolatedAsyncioTestCase):

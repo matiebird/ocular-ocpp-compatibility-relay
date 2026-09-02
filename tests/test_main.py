@@ -19,14 +19,14 @@ BASE = {
     "max_message_bytes": 65536,
     "log_level": "info",
 }
+AUTO = {**BASE, "expected_paths": [], "upstream_path": "", "charge_point_id": "auto"}
 
 
 class OptionsTests(unittest.TestCase):
     def test_missing_supervisor_token_keeps_relay_available(self):
-        config = config_from_options(BASE)
         logger = logging.getLogger("ocular_ocpp_websocket_proxy")
         with self.assertLogs(logger, level="ERROR") as captured:
-            callback = _timing_callback(config, {})
+            callback = _timing_callback({})
         self.assertIsNone(callback)
         self.assertIn("timing_disabled", "\n".join(captured.output))
 
@@ -54,6 +54,32 @@ class OptionsTests(unittest.TestCase):
         self.assertEqual(config.upstream_path, "/central/central")
         self.assertEqual(config.charge_point_id, "central")
         self.assertEqual(config.max_message_bytes, 65536)
+
+    def test_auto_charge_point_id_learns_from_the_charger(self):
+        for options in (
+            AUTO,
+            {**AUTO, "expected_paths": None, "upstream_path": None},
+            {k: v for k, v in AUTO.items() if k not in ("expected_paths", "upstream_path")},
+            {k: v for k, v in AUTO.items() if k != "charge_point_id"},
+        ):
+            with self.subTest(options=options):
+                config = config_from_options(options)
+                self.assertTrue(config.learns_charge_point_id)
+                self.assertIsNone(config.charge_point_id)
+                self.assertIsNone(config.upstream_path)
+                self.assertEqual(config.expected_paths, ())
+
+    def test_auto_charge_point_id_rejects_pinned_paths(self):
+        with self.assertRaisesRegex(ValueError, "auto"):
+            config_from_options({**AUTO, "expected_paths": ["/central/central"]})
+        with self.assertRaisesRegex(ValueError, "auto"):
+            config_from_options({**AUTO, "upstream_path": "/central/central"})
+
+    def test_pinned_charge_point_id_requires_paths(self):
+        with self.assertRaises(ValueError):
+            config_from_options({**BASE, "expected_paths": []})
+        with self.assertRaises(ValueError):
+            config_from_options({**BASE, "upstream_path": ""})
 
     def test_accepts_a_bounded_custom_home_assistant_ocpp_port(self):
         config = config_from_options({**BASE, "upstream_port": 9100})
@@ -101,7 +127,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         relay = AsyncMock()
         with tempfile.TemporaryDirectory() as directory:
             options_path = Path(directory) / "options.json"
-            options_path.write_text(json.dumps(BASE), encoding="utf-8")
+            options_path.write_text(json.dumps(AUTO), encoding="utf-8")
             logger = logging.getLogger("ocular_ocpp_websocket_proxy")
             with (
                 patch("proxy.main._configure_logging"),

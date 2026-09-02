@@ -8,6 +8,8 @@ from http.client import HTTPException
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .server import is_valid_charge_point_id
+
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 TIMING_VALUES = {
     "HeartbeatInterval": "60",
@@ -25,33 +27,28 @@ class HomeAssistantTimingClient:
     def __init__(
         self,
         token: str,
-        device_id: str,
         *,
         api_base: str = DEFAULT_API_BASE,
         request_json: Callable[[str, dict[str, str]], Any] | None = None,
     ) -> None:
         if not token:
             raise ValueError("Home Assistant API token is unavailable")
-        if (
-            not isinstance(device_id, str)
-            or not 1 <= len(device_id) <= 64
-            or any(
-                character
-                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
-                for character in device_id
-            )
-        ):
-            raise ValueError("ocpp_device_id is invalid")
         self._token = token
-        self.device_id = device_id
         self.api_base = api_base.rstrip("/")
         self._request_json = request_json or self._default_request_json
 
-    def apply_and_verify(self) -> dict[str, str]:
+    def apply_and_verify(self, device_id: str) -> dict[str, str]:
+        """Apply the timing values to the charger HA knows as ``device_id``.
+
+        ``device_id`` is the charger's OCPP identity taken from its connection,
+        so it is validated here rather than at construction time.
+        """
+        if not is_valid_charge_point_id(device_id):
+            raise ValueError("ocpp device id is invalid")
         for key, value in TIMING_VALUES.items():
             response = self._request_json(
                 "/api/services/ocpp/configure?return_response",
-                {"devid": self.device_id, "ocpp_key": key, "value": value},
+                {"devid": device_id, "ocpp_key": key, "value": value},
             )
             try:
                 reboot_required = response["service_response"]["reboot_required"]
@@ -68,7 +65,7 @@ class HomeAssistantTimingClient:
         for key, expected in TIMING_VALUES.items():
             response = self._request_json(
                 "/api/services/ocpp/get_configuration?return_response",
-                {"devid": self.device_id, "ocpp_key": key},
+                {"devid": device_id, "ocpp_key": key},
             )
             try:
                 actual = str(response["service_response"]["value"])
@@ -120,15 +117,19 @@ class TimingController:
         self._sleep = sleep
         self._lock = asyncio.Lock()
 
-    async def apply_after_connection(self) -> dict[str, str]:
+    async def apply_after_connection(self, charge_point_id: str) -> dict[str, str]:
         async with self._lock:
             await self._sleep(self.initial_delay)
             delays = (*self.retry_delays, None)
             for attempt, retry_delay in enumerate(delays, start=1):
                 try:
-                    readback = await asyncio.to_thread(self.client.apply_and_verify)
+                    readback = await asyncio.to_thread(
+                        self.client.apply_and_verify, charge_point_id
+                    )
                     LOGGER.info(
-                        "timing_verified heartbeat=%s websocket_ping=%s meter_sample=%s",
+                        "timing_verified charge_point_id=%s heartbeat=%s "
+                        "websocket_ping=%s meter_sample=%s",
+                        charge_point_id,
                         readback["HeartbeatInterval"],
                         readback["WebSocketPingInterval"],
                         readback["MeterValueSampleInterval"],
@@ -137,7 +138,9 @@ class TimingController:
                 except TimingVerificationError as exc:
                     if retry_delay is None:
                         LOGGER.error(
-                            "timing_verification_failed attempts=%d error_type=%s",
+                            "timing_verification_failed charge_point_id=%s "
+                            "attempts=%d error_type=%s",
+                            charge_point_id,
                             attempt,
                             type(exc).__name__,
                         )

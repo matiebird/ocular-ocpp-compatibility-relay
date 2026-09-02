@@ -6,7 +6,8 @@
 - Use the Supervisor default init so container signals reach the relay process.
 - Attribute a charger dropping mid-forward to `charger_close` rather than `upstream_failure` in connection diagnostics.
 - Reject `.` and `..` path segments in `expected_paths` and `upstream_path`.
-- Fill the chosen charge-point ID into the installed fallback timing script and example package, and default both to `central` like the app, so custom charger IDs work end to end.
+- Accept the charger's configured ID by default (`charge_point_id: auto`): any well-formed charger path is forwarded to Home Assistant unchanged and its last segment is used for automatic timing. Pass an ID to the installer to pin the relay to a single charger path as before.
+- Fill a pinned charge-point ID into the installed fallback timing script and example package, which now default to `central` like the previous app option.
 
 ## 0.3.9
 

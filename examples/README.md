@@ -68,7 +68,7 @@ If `Current Import` or `Power Active Import` is missing, open the OCPP integrati
 
    Do not create a second `homeassistant:` section. If one already exists, add only the `packages:` line beneath it.
 
-3. In the copied package, replace the `ocular` entity IDs if your Home Assistant charger identifier differs. The `devid` values are the OCPP charge-point ID; the installed copy under `/addons/ocular_ocpp_compatibility_relay/examples` already carries the ID you gave the installer (default `central`).
+3. In the copied package, replace the `ocular` entity IDs if your Home Assistant charger identifier differs. The `devid` values are the OCPP charge-point ID: replace `devid: central` with the ID shown as `charge_point_id=` in the relay log, unless you pinned an ID with the installer, in which case the installed copy under `/addons/ocular_ocpp_compatibility_relay/examples` already carries it.
 
 4. Set the `input_number.ocular_charge_current` maximum no higher than the lowest commissioned limit of the charger, circuit, cable, vehicle and site. The example shows the charger's supported **6 A** to **32 A** range; a lower installation limit must remain lower.
 

@@ -3,8 +3,9 @@
 # Copy this file to /config/packages/ocular_everyday_controls.yaml only after
 # completing examples/README.md. The entity IDs below assume the Home Assistant
 # charger identifier is "ocular" and the charger has one connector. The devid
-# values address the charger by its OCPP charge-point ID; the installer sets
-# them to the ID you chose (default "central").
+# values address the charger by its OCPP charge-point ID: replace "central"
+# with the charge_point_id shown in the relay log, unless you pinned an ID with
+# the installer, which fills it in for you.
 #
 # This package deliberately contains no solar, tariff, battery or reset policy.
 # Automatic terminal-taper stopping is OFF until the user enables its helper.

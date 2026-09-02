@@ -11,32 +11,32 @@ import signal
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
-from .server import OcppWebSocketRelay, RelayConfig
+from .server import (
+    OcppWebSocketRelay,
+    RelayConfig,
+    is_canonical_path,
+    is_valid_charge_point_id,
+)
 from .timing import HomeAssistantTimingClient, TimingController
 
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 MAX_ALLOWLIST_ENTRIES = 16
 MAX_EXPECTED_PATHS = 8
-MAX_PATH_LENGTH = 256
+AUTO_CHARGE_POINT_ID = "auto"
 SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 def _validate_path(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.startswith("/"):
         raise ValueError(f"{name} must be an absolute WebSocket path")
-    if (
-        len(value) > MAX_PATH_LENGTH
-        or urlsplit(value).query
-        or urlsplit(value).fragment
-    ):
-        raise ValueError(f"{name} is invalid or too long")
-    if value.endswith("/") or any(
-        segment in ("", ".", "..") for segment in value[1:].split("/")
-    ):
-        raise ValueError(f"{name} must be canonical")
+    if not is_canonical_path(value):
+        raise ValueError(f"{name} must be a bounded canonical path without a query")
     return value
+
+
+def _empty(value: Any) -> bool:
+    return value is None or value == "" or value == []
 
 
 def config_from_options(options: dict[str, Any]) -> RelayConfig:
@@ -52,27 +52,35 @@ def config_from_options(options: dict[str, Any]) -> RelayConfig:
     if len(set(normalized_sources)) != len(normalized_sources):
         raise ValueError("allowed_sources contains duplicates")
 
+    charge_point_id = options.get("charge_point_id", AUTO_CHARGE_POINT_ID)
     paths = options.get("expected_paths")
-    if not isinstance(paths, list) or not 1 <= len(paths) <= MAX_EXPECTED_PATHS:
-        raise ValueError("expected_paths must be a bounded non-empty list")
-    expected_paths = tuple(_validate_path(value, "expected_path") for value in paths)
-    if len(set(expected_paths)) != len(expected_paths):
-        raise ValueError("expected_paths contains duplicates")
-
-    charge_point_id = options.get("charge_point_id")
-    if (
-        not isinstance(charge_point_id, str)
-        or not 1 <= len(charge_point_id) <= 64
-        or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
-            for character in charge_point_id
-        )
-    ):
-        raise ValueError("charge_point_id is invalid")
-    upstream_path = _validate_path(options.get("upstream_path"), "upstream_path")
-    if upstream_path.rsplit("/", 1)[-1] != charge_point_id:
-        raise ValueError("upstream_path must preserve the HA charge-point identity")
+    if charge_point_id == AUTO_CHARGE_POINT_ID:
+        # Learn the charger's configured identity from each connection path and
+        # forward that path unchanged, so no ID has to be agreed in advance.
+        if not _empty(paths) or not _empty(options.get("upstream_path")):
+            raise ValueError(
+                "expected_paths and upstream_path must be empty when "
+                "charge_point_id is auto"
+            )
+        expected_paths: tuple[str, ...] = ()
+        upstream_path = None
+        charge_point_id = None
+    else:
+        if not is_valid_charge_point_id(charge_point_id):
+            raise ValueError("charge_point_id is invalid")
+        if (
+            not isinstance(paths, list)
+            or not 1 <= len(paths) <= MAX_EXPECTED_PATHS
+        ):
+            raise ValueError("expected_paths must be a bounded non-empty list")
+        expected_paths = tuple(_validate_path(value, "expected_path") for value in paths)
+        if len(set(expected_paths)) != len(expected_paths):
+            raise ValueError("expected_paths contains duplicates")
+        upstream_path = _validate_path(options.get("upstream_path"), "upstream_path")
+        if upstream_path.rsplit("/", 1)[-1] != charge_point_id:
+            raise ValueError(
+                "upstream_path must preserve the HA charge-point identity"
+            )
 
     size = options.get("max_message_bytes")
     if (
@@ -146,16 +154,12 @@ def _request_stop(stop_event: asyncio.Event, signum: int) -> None:
     stop_event.set()
 
 
-def _timing_callback(config: RelayConfig, environment: Mapping[str, str]):
+def _timing_callback(environment: Mapping[str, str]):
     token = environment.get("SUPERVISOR_TOKEN", "")
     if not token:
         LOGGER.error("timing_disabled reason=home_assistant_api_token_unavailable")
         return None
-    timing_client = HomeAssistantTimingClient(
-        token=token,
-        device_id=config.charge_point_id,
-    )
-    return TimingController(timing_client).apply_after_connection
+    return TimingController(HomeAssistantTimingClient(token)).apply_after_connection
 
 
 async def run(options_path: Path) -> None:
@@ -167,7 +171,7 @@ async def run(options_path: Path) -> None:
         raise ValueError("unsupported log_level")
     _configure_logging(level_name)
     config = config_from_options(options)
-    timing_callback = _timing_callback(config, os.environ)
+    timing_callback = _timing_callback(os.environ)
     _drop_privileges()
     relay = OcppWebSocketRelay(config, on_upstream_connected=timing_callback)
     stop_event = asyncio.Event()
@@ -176,10 +180,11 @@ async def run(options_path: Path) -> None:
         loop.add_signal_handler(signum, _request_stop, stop_event, signum)
     await relay.start()
     LOGGER.info(
-        "listening port=%d sources=%d paths=%d upstream=%s uid=%d",
+        "listening port=%d sources=%d paths=%d charge_point_id=%s upstream=%s uid=%d",
         config.listen_port,
         len(config.allowed_sources),
         len(config.expected_paths),
+        config.charge_point_id or AUTO_CHARGE_POINT_ID,
         config.upstream_base,
         os.geteuid(),
     )

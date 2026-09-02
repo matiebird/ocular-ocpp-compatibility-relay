@@ -18,6 +18,11 @@ OPEN_TIMEOUT_SECONDS = 10
 HANDSHAKE_READ_LIMIT = 16_384
 LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
+MAX_PATH_LENGTH = 256
+MAX_CHARGE_POINT_ID_LENGTH = 64
+CHARGE_POINT_ID_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+)
 
 
 def _safe_log_path(request_target: str) -> str:
@@ -26,16 +31,75 @@ def _safe_log_path(request_target: str) -> str:
     return ascii(path)
 
 
+def is_valid_charge_point_id(value: Any) -> bool:
+    """Bounded OCPP charge-point identity made only of URL-safe characters."""
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= MAX_CHARGE_POINT_ID_LENGTH
+        and all(character in CHARGE_POINT_ID_CHARACTERS for character in value)
+    )
+
+
+def is_canonical_path(value: Any) -> bool:
+    """Absolute, bounded WebSocket path without query, fragment or dot segments."""
+    return (
+        isinstance(value, str)
+        and value.startswith("/")
+        and len(value) <= MAX_PATH_LENGTH
+        and "?" not in value
+        and "#" not in value
+        and all(segment not in ("", ".", "..") for segment in value[1:].split("/"))
+    )
+
+
 @dataclass(frozen=True)
 class RelayConfig:
+    """Relay settings.
+
+    With ``expected_paths`` set, only those charger paths are accepted and every
+    session is forwarded to ``upstream_path`` for the pinned ``charge_point_id``.
+    With ``expected_paths`` empty, ``upstream_path`` and ``charge_point_id`` must
+    be ``None``: any canonical charger path is accepted, forwarded unchanged and
+    its last segment is the charger's configured OCPP identity.
+    """
+
     listen_host: str
     listen_port: int
     upstream_base: str
-    upstream_path: str
-    charge_point_id: str
+    upstream_path: str | None
+    charge_point_id: str | None
     allowed_sources: tuple[str, ...]
     expected_paths: tuple[str, ...]
     max_message_bytes: int
+
+    def __post_init__(self) -> None:
+        if self.expected_paths:
+            if self.upstream_path is None or self.charge_point_id is None:
+                raise ValueError(
+                    "upstream_path and charge_point_id are required with expected_paths"
+                )
+        elif self.upstream_path is not None or self.charge_point_id is not None:
+            raise ValueError(
+                "upstream_path and charge_point_id must be unset without expected_paths"
+            )
+
+    @property
+    def learns_charge_point_id(self) -> bool:
+        return not self.expected_paths
+
+    def resolve(self, path: str) -> tuple[str, str] | None:
+        """Return ``(upstream_path, charge_point_id)`` for a charger path, else None."""
+        if self.expected_paths:
+            if path not in self.expected_paths:
+                return None
+            assert self.upstream_path is not None and self.charge_point_id is not None
+            return self.upstream_path, self.charge_point_id
+        if not is_canonical_path(path):
+            return None
+        charge_point_id = path.rsplit("/", 1)[-1]
+        if not is_valid_charge_point_id(charge_point_id):
+            return None
+        return path, charge_point_id
 
 
 @dataclass(frozen=True)
@@ -59,7 +123,7 @@ class GuardedServerProtocol(WebSocketServerProtocol):
             LOGGER.warning("opening_rejected reason=source source=%s", source)
             return self._rejection(HTTPStatus.FORBIDDEN, b"source rejected\n")
 
-        if path not in self.relay.config.expected_paths:
+        if self.relay.config.resolve(path) is None:
             self.relay.counters["rejected_path"] += 1
             LOGGER.warning("opening_rejected reason=path source=%s", source)
             LOGGER.debug(
@@ -93,19 +157,19 @@ class OcppWebSocketRelay:
     def __init__(
         self,
         config: RelayConfig,
-        on_upstream_connected: Callable[[], Awaitable[object]] | None = None,
+        on_upstream_connected: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
         self.config = config
         self.on_upstream_connected = on_upstream_connected
         self.server = None
         self._stopping = False
         self._background_tasks: set[asyncio.Task] = set()
-        self._timing_pending = False
+        self._timing_pending: str | None = None
         self.counters: Counter[str] = Counter()
 
     async def start(self):
         self._stopping = False
-        self._timing_pending = False
+        self._timing_pending = None
         self.server = await websockets.serve(
             self._handle_charger,
             self.config.listen_host,
@@ -123,7 +187,7 @@ class OcppWebSocketRelay:
         return self.server
 
     async def stop(self) -> None:
-        self._timing_pending = False
+        self._timing_pending = None
         if self.server is not None:
             self._stopping = True
             self.server.close()
@@ -135,15 +199,15 @@ class OcppWebSocketRelay:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
 
-    def _start_timing(self) -> None:
+    def _start_timing(self, charge_point_id: str) -> None:
         if self.on_upstream_connected is None:
             return
         if self._background_tasks:
             self.counters["timing_coalesced"] += 1
-            self._timing_pending = True
+            self._timing_pending = charge_point_id
             return
         self.counters["timing_attempts"] += 1
-        task = asyncio.create_task(self.on_upstream_connected())
+        task = asyncio.create_task(self.on_upstream_connected(charge_point_id))
         self._background_tasks.add(task)
         task.add_done_callback(self._timing_done)
 
@@ -154,9 +218,10 @@ class OcppWebSocketRelay:
         error = task.exception()
         if error is not None:
             LOGGER.error("timing_task_failed error_type=%s", type(error).__name__)
-        if self._timing_pending and not self._stopping:
-            self._timing_pending = False
-            self._start_timing()
+        pending = self._timing_pending
+        if pending is not None and not self._stopping:
+            self._timing_pending = None
+            self._start_timing(pending)
 
     async def _handle_charger(self, charger, path: str) -> None:
         source = self._source(charger)
@@ -165,12 +230,18 @@ class OcppWebSocketRelay:
             self.counters["rejected_subprotocol"] += 1
             await charger.close(code=1002, reason="ocpp1.6 required")
             return
+        resolved = self.config.resolve(path)
+        if resolved is None:
+            self.counters["rejected_path"] += 1
+            await charger.close(code=1008, reason="path rejected")
+            return
+        upstream_path, charge_point_id = resolved
 
         self.counters["accepted_connections"] += 1
-        LOGGER.info("connection_open source=%s", source)
-        upstream_url = (
-            f"{self.config.upstream_base.rstrip('/')}{self.config.upstream_path}"
+        LOGGER.info(
+            "connection_open source=%s charge_point_id=%s", source, charge_point_id
         )
+        upstream_url = f"{self.config.upstream_base.rstrip('/')}{upstream_path}"
         try:
             async with websockets.connect(
                 upstream_url,
@@ -186,7 +257,7 @@ class OcppWebSocketRelay:
                 if upstream.subprotocol != OCPP_SUBPROTOCOL:
                     raise RuntimeError("upstream rejected ocpp1.6 subprotocol")
                 self.counters["upstream_connections"] += 1
-                self._start_timing()
+                self._start_timing(charge_point_id)
                 termination = await self._bridge(charger, upstream)
         except asyncio.CancelledError:
             termination = BridgeTermination("relay_shutdown", None)
@@ -201,8 +272,10 @@ class OcppWebSocketRelay:
                 await charger.close(code=1011, reason="upstream unavailable")
         finally:
             LOGGER.info(
-                "connection_closed source=%s cause=%s charger_code=%s upstream_code=%s",
+                "connection_closed source=%s charge_point_id=%s cause=%s "
+                "charger_code=%s upstream_code=%s",
                 source,
+                charge_point_id,
                 termination.cause,
                 charger.close_code,
                 termination.upstream_code,

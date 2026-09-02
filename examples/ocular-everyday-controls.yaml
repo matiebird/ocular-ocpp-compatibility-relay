@@ -87,7 +87,7 @@ script:
              and transaction_id | int(-1) > 0 }}
       - action: ocpp.set_charge_rate
         data:
-          devid: central
+          devid: "central"
           conn_id: 1
           custom_profile: >-
             {{ {
@@ -140,7 +140,7 @@ script:
             sequence:
               - action: ocpp.set_charge_rate
                 data:
-                  devid: central
+                  devid: "central"
                   conn_id: 1
                   custom_profile: >-
                     {{ {

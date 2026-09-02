@@ -22,9 +22,9 @@ options:
   allowed_sources:
     - "192.168.1.50"
   expected_paths:
-    - /central/central
-  upstream_path: /central/central
-  charge_point_id: central
+    - "/central/central"
+  upstream_path: "/central/central"
+  charge_point_id: "central"
   upstream_port: 9000
   max_message_bytes: 65536
   log_level: info

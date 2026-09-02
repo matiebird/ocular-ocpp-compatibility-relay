@@ -7,7 +7,7 @@ description: >-
   charge-point ID you chose; edit it only if you address the charger by a
   different Home Assistant charger identifier.
 variables:
-  ocpp_device_id: central
+  ocpp_device_id: "central"
 sequence:
   - action: ocpp.configure
     data:

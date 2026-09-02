@@ -1,6 +1,13 @@
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
+
+from proxy.main import config_from_options
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,7 +82,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("ocular_pause_charging:", controls)
         self.assertIn("ocular_resume_charging:", controls)
         self.assertIn("ocular_stop_charging:", controls)
-        self.assertIn("devid: central", controls)
+        self.assertIn('devid: "central"', controls)
         self.assertNotIn("devid: ocular", controls)
         self.assertIn("chargingProfilePurpose", controls)
         self.assertIn("TxProfile", controls)
@@ -185,7 +192,7 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("  upstream_base:", config)
         self.assertNotIn('UPSTREAM_BASE = "ws://homeassistant:9001"', main)
         self.assertIn('f"ws://homeassistant:{upstream_port}"', main)
-        self.assertIn("charge_point_id: central", config)
+        self.assertIn('charge_point_id: "central"', config)
 
     def test_installer_enables_automatic_verified_timing(self):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
@@ -199,14 +206,14 @@ class PackageTests(unittest.TestCase):
         self.assertIn("ha apps install", installer)
         self.assertIn("ha apps start", installer)
         self.assertIn("HeartbeatInterval", timing)
-        self.assertIn("ocpp_device_id: central", timing)
+        self.assertIn('ocpp_device_id: "central"', timing)
         self.assertNotIn("ocular", timing)
         self.assertIn(
-            's/^  ocpp_device_id: central$/  ocpp_device_id: $CHARGE_POINT_ID/',
+            'render_installed_files "$TARGET_DIR" "$CHARGER_IP" "$CHARGE_POINT_ID"',
             installer,
         )
-        self.assertIn('"$TARGET_DIR/ha-timing-script.yaml"', installer)
-        self.assertIn('"$TARGET_DIR/examples/ocular-everyday-controls.yaml"', installer)
+        self.assertIn('"$target/ha-timing-script.yaml"', installer)
+        self.assertIn('"$target/examples/ocular-everyday-controls.yaml"', installer)
         self.assertIn("WebSocketPingInterval", timing)
         self.assertIn("MeterValueSampleInterval", timing)
         self.assertIn("uninstall.sh", guide)
@@ -242,6 +249,119 @@ class PackageTests(unittest.TestCase):
         self.assertIn('"state"', installer)
         self.assertIn('"started"', installer)
         self.assertIn('ha apps logs "$SLUG"', installer)
+
+
+def _values_for_key(node, key):
+    """Yield every value stored under ``key`` anywhere in a parsed YAML tree."""
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                yield value
+            yield from _values_for_key(value, key)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _values_for_key(value, key)
+
+
+class InstallerRenderTests(unittest.TestCase):
+    """Run the installer's real substitutions and parse what they produce."""
+
+    CHARGER_IP = "192.0.2.10"
+    PORT = "9001"
+
+    def render(self, charge_point_id, *, charger_ip=CHARGER_IP, port=PORT):
+        target = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, target, ignore_errors=True)
+        for name in ("config.yaml", "ha-timing-script.yaml"):
+            shutil.copy(ROOT / name, target / name)
+        shutil.copytree(ROOT / "examples", target / "examples")
+        completed = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "install.sh"),
+                "--render",
+                str(target),
+                charger_ip,
+                charge_point_id,
+                port,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return completed, target
+
+    def test_yaml_reserved_and_numeric_ids_stay_strings_end_to_end(self):
+        for charge_point_id in (
+            "central",
+            "my-charger_1.a",
+            "123",
+            "01",
+            "1.0",
+            "true",
+            "false",
+            "yes",
+            "no",
+            "on",
+            "null",
+            ".nan",
+            ".inf",
+            "2026-01-01",
+            "-",
+            "...",
+        ):
+            with self.subTest(charge_point_id=charge_point_id):
+                completed, target = self.render(charge_point_id)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                expected_path = f"/{charge_point_id}/{charge_point_id}"
+
+                config = yaml.safe_load((target / "config.yaml").read_text("utf-8"))
+                options = config["options"]
+                self.assertIs(type(options["charge_point_id"]), str)
+                self.assertEqual(options["charge_point_id"], charge_point_id)
+                self.assertEqual(options["expected_paths"], [expected_path])
+                self.assertEqual(options["upstream_path"], expected_path)
+                self.assertEqual(options["allowed_sources"], [self.CHARGER_IP])
+                self.assertEqual(options["upstream_port"], int(self.PORT))
+                # The relay itself must accept exactly what the installer wrote.
+                relay_config = config_from_options(options)
+                self.assertEqual(relay_config.charge_point_id, charge_point_id)
+                self.assertEqual(relay_config.upstream_path, expected_path)
+
+                timing = yaml.safe_load(
+                    (target / "ha-timing-script.yaml").read_text("utf-8")
+                )
+                self.assertIs(type(timing["variables"]["ocpp_device_id"]), str)
+                self.assertEqual(timing["variables"]["ocpp_device_id"], charge_point_id)
+
+                controls = yaml.safe_load(
+                    (target / "examples" / "ocular-everyday-controls.yaml").read_text(
+                        "utf-8"
+                    )
+                )
+                devids = list(_values_for_key(controls, "devid"))
+                self.assertGreaterEqual(len(devids), 2)
+                for devid in devids:
+                    self.assertIs(type(devid), str)
+                    self.assertEqual(devid, charge_point_id)
+
+    def test_rejects_ids_that_cannot_form_a_canonical_path(self):
+        for charge_point_id in (".", "..", "", "bad id", "a/b", "a&b", "x" * 65):
+            with self.subTest(charge_point_id=charge_point_id):
+                completed, target = self.render(charge_point_id)
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("CHARGE_POINT_ID", completed.stderr)
+                # Nothing was rewritten before validation failed.
+                config = (target / "config.yaml").read_text("utf-8")
+                self.assertIn('charge_point_id: "central"', config)
+
+    def test_rejects_bad_charger_ip_and_port(self):
+        completed, _ = self.render("central", charger_ip="192.0.2.256")
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("IPv4", completed.stderr)
+        completed, _ = self.render("central", port="70000")
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("HA_OCPP_PORT", completed.stderr)
 
 
 if __name__ == "__main__":

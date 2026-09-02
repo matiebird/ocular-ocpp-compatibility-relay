@@ -15,13 +15,19 @@ from websockets.legacy.server import WebSocketServerProtocol
 LOGGER = logging.getLogger("ocular_ocpp_websocket_proxy")
 OCPP_SUBPROTOCOL = "ocpp1.6"
 OPEN_TIMEOUT_SECONDS = 10
-# Supervisor kills the container 10 s after "ha apps stop"; the close handshake
-# per session and the whole stop() must finish well inside that.
-CLOSE_TIMEOUT_SECONDS = 2
-STOP_TIMEOUT_SECONDS = 5
+# Supervisor kills the container 10 s after "ha apps stop", so every phase of
+# stop() is bounded and the whole teardown has one aggregate deadline.
+CLOSE_TIMEOUT_SECONDS = 2  # close-frame and TCP-close wait per session
+GRACEFUL_STOP_SECONDS = 3  # window for close frames and handler completion
+STOP_TIMEOUT_SECONDS = 5  # aggregate limit for the whole teardown
+FORCED_STOP_GRACE_SECONDS = 0.5  # settle time for tasks cancelled at the deadline
 HANDSHAKE_READ_LIMIT = 16_384
 LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
+
+
+def _remaining(deadline: float, floor: float = 0.0) -> float:
+    return max(deadline - asyncio.get_running_loop().time(), floor)
 
 
 def _safe_log_path(request_target: str) -> str:
@@ -103,12 +109,16 @@ class OcppWebSocketRelay:
         self.on_upstream_connected = on_upstream_connected
         self.server = None
         self._stopping = False
+        self._stop_task: asyncio.Task | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._connecting: dict[asyncio.Task, Any] = {}
         self._timing_pending = False
         self.counters: Counter[str] = Counter()
 
     async def start(self):
         self._stopping = False
+        self._stop_task = None
+        self._connecting.clear()
         self._timing_pending = False
         self.server = await websockets.serve(
             self._handle_charger,
@@ -128,31 +138,87 @@ class OcppWebSocketRelay:
         return self.server
 
     async def stop(self) -> None:
+        """Tear the relay down once; concurrent callers share the same teardown."""
+        if self._stop_task is None:
+            self._stop_task = asyncio.create_task(self._teardown())
+        await asyncio.shield(self._stop_task)
+
+    async def _teardown(self) -> None:
+        deadline = asyncio.get_running_loop().time() + STOP_TIMEOUT_SECONDS
+        self._stopping = True
         self._timing_pending = False
-        if self.server is not None:
-            self._stopping = True
-            server, self.server = self.server, None
-            server.close()
-            try:
-                await asyncio.wait_for(server.wait_closed(), STOP_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                # A handler can still be inside a stalled upstream handshake.
-                # Cancel it rather than let Supervisor kill the whole process.
-                handlers = [
-                    websocket.handler_task
-                    for websocket in server.websockets
-                    if not websocket.handler_task.done()
-                ]
-                LOGGER.warning("stop_timeout sessions=%d", len(handlers))
-                for task in handlers:
-                    task.cancel()
-                if handlers:
-                    await asyncio.wait(handlers, timeout=CLOSE_TIMEOUT_SECONDS)
-        for task in self._background_tasks:
+        server, self.server = self.server, None
+        residual: set[asyncio.Task] = set()
+        try:
+            if server is not None:
+                residual |= await self._close_server(server, deadline)
+        except Exception as exc:
+            LOGGER.error("stop_error error_type=%s", type(exc).__name__)
+        finally:
+            # Timing work is cancelled even if closing the server failed.
+            for task in self._background_tasks:
+                task.cancel()
+            residual |= self._background_tasks
+            self._background_tasks = set()
+            await self._settle(residual, deadline)
+
+    async def _close_server(self, server, deadline: float) -> set[asyncio.Task]:
+        """Close the listener and sessions; return tasks still alive afterwards."""
+        server.close()
+        # A session still opening its upstream connection has no upstream to
+        # close gracefully; close its charger side and cancel it right away so
+        # a stalled handshake cannot consume the graceful window.
+        abort = asyncio.create_task(self._abort_connecting())
+        closed = asyncio.ensure_future(server.wait_closed())
+        done, _ = await asyncio.wait(
+            {closed}, timeout=min(GRACEFUL_STOP_SECONDS, _remaining(deadline))
+        )
+        if closed in done:
+            error = closed.exception()
+            if error is not None:
+                LOGGER.error("stop_error error_type=%s", type(error).__name__)
+            return {abort}
+        closed.cancel()
+        residual = {
+            websocket.handler_task
+            for websocket in server.websockets
+            if not websocket.handler_task.done()
+        }
+        LOGGER.warning("stop_timeout sessions=%d", len(residual))
+        for task in residual:
             task.cancel()
-        if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
+        residual.update({closed, abort})
+        close_task = getattr(server, "close_task", None)
+        if close_task is not None and not close_task.done():
+            # Finishes once the cancelled handlers do; cancelled at the deadline.
+            residual.add(close_task)
+        return residual
+
+    async def _abort_connecting(self) -> None:
+        async def abort(handler: asyncio.Task, charger) -> None:
+            try:
+                await charger.close(code=1001, reason="relay shutdown")
+            finally:
+                handler.cancel()
+
+        await asyncio.gather(
+            *(abort(handler, charger) for handler, charger in self._connecting.items()),
+            return_exceptions=True,
+        )
+
+    @staticmethod
+    async def _settle(tasks: set[asyncio.Task], deadline: float) -> None:
+        pending = {task for task in tasks if not task.done()}
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=_remaining(deadline))
+        if pending:
+            for task in pending:
+                task.cancel()
+            _, pending = await asyncio.wait(
+                pending, timeout=_remaining(deadline, FORCED_STOP_GRACE_SECONDS)
+            )
+        if pending:
+            LOGGER.error("stop_abandoned tasks=%d", len(pending))
 
     def _start_timing(self) -> None:
         if self.on_upstream_connected is None:
@@ -190,6 +256,8 @@ class OcppWebSocketRelay:
         upstream_url = (
             f"{self.config.upstream_base.rstrip('/')}{self.config.upstream_path}"
         )
+        handler = asyncio.current_task()
+        self._connecting[handler] = charger
         try:
             async with websockets.connect(
                 upstream_url,
@@ -203,6 +271,7 @@ class OcppWebSocketRelay:
                 read_limit=HANDSHAKE_READ_LIMIT,
                 write_limit=65_536,
             ) as upstream:
+                self._connecting.pop(handler, None)
                 if upstream.subprotocol != OCPP_SUBPROTOCOL:
                     raise RuntimeError("upstream rejected ocpp1.6 subprotocol")
                 self.counters["upstream_connections"] += 1
@@ -220,6 +289,7 @@ class OcppWebSocketRelay:
             if not charger.closed:
                 await charger.close(code=1011, reason="upstream unavailable")
         finally:
+            self._connecting.pop(handler, None)
             LOGGER.info(
                 "connection_closed source=%s cause=%s charger_code=%s upstream_code=%s",
                 source,

@@ -313,7 +313,7 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cause=relay_shutdown", output)
         self.assertIn("charger_code=1001", output)
 
-    async def test_stop_is_bounded_while_upstream_handshake_stalls(self):
+    async def start_stalled_upstream(self):
         release = asyncio.Event()
 
         async def stall(reader, writer):
@@ -324,27 +324,52 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(stalled.wait_closed)
         self.addCleanup(stalled.close)
         self.addCleanup(release.set)
-        stalled_port = stalled.sockets[0].getsockname()[1]
-        relay, port = await self.start_relay(
-            upstream_base=f"ws://127.0.0.1:{stalled_port}"
-        )
-        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        return stalled.sockets[0].getsockname()[1]
+
+    async def test_stop_cancels_a_stalled_upstream_handshake_promptly(self):
+        stalled_port = await self.start_stalled_upstream()
+        # The upstream connect happens inside the handler, so the shortened
+        # close timeout has to stay in force for the whole test.
         with (
-            patch("proxy.server.STOP_TIMEOUT_SECONDS", 0.3),
-            self.assertLogs(logger, level="INFO") as captured,
+            patch("proxy.server.CLOSE_TIMEOUT_SECONDS", 0.2),
+            self.assertLogs(
+                logging.getLogger("ocular_ocpp_websocket_proxy"), level="INFO"
+            ) as captured,
         ):
+            relay, port = await self.start_relay(
+                upstream_base=f"ws://127.0.0.1:{stalled_port}"
+            )
+            server = relay.server
             charger = await self.connect(port)
             self.addAsyncCleanup(charger.close)
             while relay.counters["accepted_connections"] == 0:
                 await asyncio.sleep(0)
+            handlers = [websocket.handler_task for websocket in server.websockets]
+            self.assertEqual(len(handlers), 1)
             started = asyncio.get_running_loop().time()
             await relay.stop()
             elapsed = asyncio.get_running_loop().time() - started
-            await asyncio.sleep(0.05)
-        self.assertLess(elapsed, 3)
+        self.assertLess(elapsed, 1.5)
         output = "\n".join(captured.output)
-        self.assertIn("stop_timeout sessions=1", output)
+        self.assertNotIn("stop_timeout", output)
         self.assertIn("cause=relay_shutdown", output)
+        self.assertEqual(charger.close_code, 1001)
+        # Every internal task has finished before stop() returns.
+        self.assertTrue(all(task.done() for task in handlers))
+        self.assertTrue(server.close_task.done())
+        self.assertEqual(len(server.websockets), 0)
+
+    async def test_concurrent_stop_calls_share_one_teardown(self):
+        relay, port = await self.start_relay()
+        charger = await self.connect(port)
+        self.addAsyncCleanup(charger.close)
+        while not self.upstream_connections:
+            await asyncio.sleep(0)
+        with patch.object(relay, "_teardown", wraps=relay._teardown) as teardown:
+            await asyncio.gather(relay.stop(), relay.stop(), relay.stop())
+            await relay.stop()
+        self.assertEqual(teardown.call_count, 1)
+        self.assertIsNone(relay.server)
         self.assertEqual(charger.close_code, 1001)
 
     async def test_connection_log_records_initial_upstream_failure(self):
@@ -449,6 +474,123 @@ class BridgeCauseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(termination.cause, "upstream_failure")
         self.assertEqual(charger.close_code, 1011)
         self.assertEqual(relay.counters["upstream_failures"], 1)
+
+
+class FakeWebSocket:
+    def __init__(self, handler_task):
+        self.handler_task = handler_task
+
+
+class FakeServer:
+    """websockets server stand-in with controllable close behaviour."""
+
+    def __init__(self, handler_tasks=(), wait_closed_error=None):
+        self.websockets = {FakeWebSocket(task) for task in handler_tasks}
+        self.close_task = None
+        self.closed = asyncio.Event()
+        self._wait_closed_error = wait_closed_error
+
+    def close(self):
+        self.close_task = asyncio.create_task(self._close())
+
+    async def _close(self):
+        handlers = [websocket.handler_task for websocket in self.websockets]
+        if handlers:
+            await asyncio.wait(handlers)
+        self.closed.set()
+
+    async def wait_closed(self):
+        if self._wait_closed_error is not None:
+            raise self._wait_closed_error
+        await self.closed.wait()
+
+
+class TeardownTests(unittest.IsolatedAsyncioTestCase):
+    def config(self):
+        return RelayConfig(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            upstream_base="ws://127.0.0.1:1",
+            upstream_path="/central/central",
+            charge_point_id="central",
+            allowed_sources=("127.0.0.1",),
+            expected_paths=("/central/central",),
+            max_message_bytes=1024,
+        )
+
+    async def start_with(self, fake_server, on_upstream_connected=None):
+        relay = OcppWebSocketRelay(
+            self.config(), on_upstream_connected=on_upstream_connected
+        )
+        with patch(
+            "proxy.server.websockets.serve",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            await relay.start()
+        return relay
+
+    async def test_timing_task_is_cancelled_even_if_server_close_fails(self):
+        timing_started = asyncio.Event()
+
+        async def timing():
+            timing_started.set()
+            await asyncio.sleep(3600)
+
+        relay = await self.start_with(
+            FakeServer(wait_closed_error=RuntimeError("boom")),
+            on_upstream_connected=timing,
+        )
+        relay._start_timing()
+        await timing_started.wait()
+        (timing_task,) = relay._background_tasks
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="ERROR") as captured:
+            await relay.stop()
+        self.assertIn("stop_error error_type=RuntimeError", "\n".join(captured.output))
+        self.assertTrue(timing_task.cancelled())
+        self.assertEqual(relay._background_tasks, set())
+
+    async def test_cancellation_resistant_session_cannot_defeat_the_deadline(self):
+        async def stubborn_handler():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                pass  # swallows the first cancellation
+            await asyncio.sleep(3600)
+
+        handler = asyncio.create_task(stubborn_handler())
+
+        async def finish(task):
+            for _ in range(5):
+                if task.done():
+                    return
+                task.cancel()
+                await asyncio.sleep(0)
+
+        self.addAsyncCleanup(finish, handler)
+        fake_server = FakeServer(handler_tasks=[handler])
+        relay = await self.start_with(fake_server)
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with (
+            patch("proxy.server.GRACEFUL_STOP_SECONDS", 0.2),
+            patch("proxy.server.STOP_TIMEOUT_SECONDS", 0.6),
+            patch("proxy.server.FORCED_STOP_GRACE_SECONDS", 0.2),
+            self.assertLogs(logger, level="WARNING") as captured,
+        ):
+            started = asyncio.get_running_loop().time()
+            await relay.stop()
+            elapsed = asyncio.get_running_loop().time() - started
+        output = "\n".join(captured.output)
+        self.assertIn("stop_timeout sessions=1", output)
+        self.assertNotIn("stop_abandoned", output)
+        self.assertLess(elapsed, 1.5)
+        self.assertTrue(handler.done())
+        self.assertTrue(fake_server.close_task.done())
+
+    async def test_stop_without_start_is_harmless(self):
+        relay = OcppWebSocketRelay(self.config())
+        await relay.stop()
+        await relay.stop()
 
 
 class ServerConfigurationTests(unittest.IsolatedAsyncioTestCase):

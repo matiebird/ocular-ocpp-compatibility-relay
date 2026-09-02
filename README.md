@@ -83,6 +83,8 @@ Example:
 bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10
 ```
 
+`CHARGER_IP` may also be a LAN network such as `192.168.1.0/24`; see below.
+
 The defaults are:
 
 ```text
@@ -107,6 +109,14 @@ bash /config/ocular-ocpp-easy-deploy/install.sh 192.168.1.50 192.168.1.10 drivew
 ```
 
 A pinned relay accepts only the path `/CHARGE_POINT_ID/CHARGE_POINT_ID` and rejects every other charger path. Pass `auto` as the charger ID to keep learning it while changing the port.
+
+#### Charger address changes and multiple chargers
+
+`CHARGER_IP` may be a single address or a CIDR network such as `192.168.1.0/24`. A network keeps the relay accepting the charger after a DHCP address change and admits several chargers on the same LAN. Networks broader than `/16` (IPv4) or `/64` (IPv6) are refused, so the allowlist can never become "everyone". The same rule applies to `allowed_sources` in the app options, which accepts up to 16 addresses or networks.
+
+With the default `auto` charger ID, multiple chargers each keep their own ID and are forwarded to Home Assistant separately, provided your Home Assistant OCPP integration version supports more than one charge point. Automatic timing is queued per charger ID, so a reconnect during another charger's timing job is never dropped.
+
+Two sessions with the same charger ID are handled by source address. A second session from the **same** address is the charger reconnecting after a dropout: the relay closes the stale session (logged as `session_superseded` and `cause=superseded`) and serves the new one immediately, rather than locking the charger out until TCP notices the old session is dead. A second session from a **different** address is refused with HTTP 409 and logged as `opening_rejected reason=duplicate_id`, so two chargers cannot fight over one identity.
 
 The installer checks the IP addresses and existing OCPP listener, backs up an older relay outside Supervisor's `/addons` scan tree, installs the local app, verifies that it is started and listening, and prints the exact charger settings. If a reinstall fails after removing the previous version, it automatically attempts to restore and restart that version.
 

@@ -91,9 +91,28 @@ class OptionsTests(unittest.TestCase):
                 config_from_options({**BASE, "upstream_port": port})
 
     def test_rejects_empty_or_invalid_source_allowlist(self):
-        for sources in ([], ["not-an-ip"], "192.0.2.10"):
+        for sources in (
+            [],
+            ["not-an-ip"],
+            "192.0.2.10",
+            ["192.0.2.5/24"],
+            ["10.0.0.0/8"],
+            ["0.0.0.0/0"],
+            ["fd00::/48"],
+            ["192.0.2.0/24", "192.0.2.0/24"],
+        ):
             with self.subTest(sources=sources), self.assertRaises(ValueError):
                 config_from_options({**BASE, "allowed_sources": sources})
+
+    def test_accepts_cidr_source_networks(self):
+        config = config_from_options(
+            {**BASE, "allowed_sources": ["192.0.2.0/24", "192.0.2.10", "fd00::/64"]}
+        )
+        self.assertEqual(
+            config.allowed_sources, ("192.0.2.0/24", "192.0.2.10", "fd00::/64")
+        )
+        self.assertTrue(config.allows_source("192.0.2.77"))
+        self.assertFalse(config.allows_source("192.0.3.1"))
 
     def test_rejects_unbounded_or_duplicate_paths(self):
         with self.assertRaises(ValueError):

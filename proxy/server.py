@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from http import HTTPStatus
 from typing import Any
@@ -20,6 +21,10 @@ LOGGED_PATH_LIMIT = 128
 WEBSOCKET_MAX_QUEUE = 16
 MAX_PATH_LENGTH = 256
 MAX_CHARGE_POINT_ID_LENGTH = 64
+# Allowed-source networks may not be broader than these prefixes, so an
+# allowlist can cover a LAN or site but never "everything".
+MIN_IPV4_PREFIX = 16
+MIN_IPV6_PREFIX = 64
 CHARGE_POINT_ID_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
 )
@@ -52,9 +57,27 @@ def is_canonical_path(value: Any) -> bool:
     )
 
 
+def normalize_source(value: Any) -> str:
+    """Return a canonical IP address or CIDR network string, else raise ValueError."""
+    if not isinstance(value, str):
+        raise ValueError("allowed source must be a string")
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        pass
+    network = ipaddress.ip_network(value, strict=True)
+    minimum = MIN_IPV4_PREFIX if network.version == 4 else MIN_IPV6_PREFIX
+    if network.prefixlen < minimum:
+        raise ValueError(f"allowed source network is broader than /{minimum}")
+    return str(network)
+
+
 @dataclass(frozen=True)
 class RelayConfig:
     """Relay settings.
+
+    ``allowed_sources`` holds IP addresses or CIDR networks; a charger may open
+    a session only from an address inside one of them.
 
     With ``expected_paths`` set, only those charger paths are accepted and every
     session is forwarded to ``upstream_path`` for the pinned ``charge_point_id``.
@@ -71,8 +94,18 @@ class RelayConfig:
     allowed_sources: tuple[str, ...]
     expected_paths: tuple[str, ...]
     max_message_bytes: int
+    allowed_networks: tuple[Any, ...] = field(
+        init=False, repr=False, compare=False, default=()
+    )
 
     def __post_init__(self) -> None:
+        if not self.allowed_sources:
+            raise ValueError("allowed_sources must not be empty")
+        networks = tuple(
+            ipaddress.ip_network(normalize_source(value), strict=True)
+            for value in self.allowed_sources
+        )
+        object.__setattr__(self, "allowed_networks", networks)
         if self.expected_paths:
             if self.upstream_path is None or self.charge_point_id is None:
                 raise ValueError(
@@ -86,6 +119,13 @@ class RelayConfig:
     @property
     def learns_charge_point_id(self) -> bool:
         return not self.expected_paths
+
+    def allows_source(self, source: str) -> bool:
+        try:
+            address = ipaddress.ip_address(source)
+        except ValueError:
+            return False
+        return any(address in network for network in self.allowed_networks)
 
     def resolve(self, path: str) -> tuple[str, str] | None:
         """Return ``(upstream_path, charge_point_id)`` for a charger path, else None."""
@@ -118,18 +158,30 @@ class GuardedServerProtocol(WebSocketServerProtocol):
     async def process_request(self, path, request_headers):
         peer = self.remote_address
         source = str(peer[0]) if isinstance(peer, tuple) and peer else "unknown"
-        if source not in self.relay.config.allowed_sources:
+        if not self.relay.config.allows_source(source):
             self.relay.counters["rejected_source"] += 1
             LOGGER.warning("opening_rejected reason=source source=%s", source)
             return self._rejection(HTTPStatus.FORBIDDEN, b"source rejected\n")
 
-        if self.relay.config.resolve(path) is None:
+        resolved = self.relay.config.resolve(path)
+        if resolved is None:
             self.relay.counters["rejected_path"] += 1
             LOGGER.warning("opening_rejected reason=path source=%s", source)
             LOGGER.debug(
                 "rejected_path source=%s path=%s", source, _safe_log_path(path)
             )
             return self._rejection(HTTPStatus.NOT_FOUND, b"path rejected\n")
+
+        if self.relay.conflicts(resolved[1], source):
+            self.relay.counters["rejected_duplicate_id"] += 1
+            LOGGER.warning(
+                "opening_rejected reason=duplicate_id source=%s charge_point_id=%s",
+                source,
+                resolved[1],
+            )
+            return self._rejection(
+                HTTPStatus.CONFLICT, b"charge point already connected\n"
+            )
 
         offered = []
         for value in request_headers.get_all("Sec-WebSocket-Protocol"):
@@ -164,12 +216,24 @@ class OcppWebSocketRelay:
         self.server = None
         self._stopping = False
         self._background_tasks: set[asyncio.Task] = set()
-        self._timing_pending: str | None = None
+        self._timing_pending: dict[str, None] = {}
+        self._active: dict[str, tuple[str, Any]] = {}
+        self._superseded: set[int] = set()
+        self._supersede_tasks: set[asyncio.Task] = set()
         self.counters: Counter[str] = Counter()
+
+    def conflicts(self, charge_point_id: str, source: str) -> bool:
+        """True when the ID is active from a different source address."""
+        active = self._active.get(charge_point_id)
+        return active is not None and active[0] != source
+
+    @property
+    def active_charge_point_ids(self) -> tuple[str, ...]:
+        return tuple(self._active)
 
     async def start(self):
         self._stopping = False
-        self._timing_pending = None
+        self._timing_pending.clear()
         self.server = await websockets.serve(
             self._handle_charger,
             self.config.listen_host,
@@ -187,24 +251,30 @@ class OcppWebSocketRelay:
         return self.server
 
     async def stop(self) -> None:
-        self._timing_pending = None
+        self._timing_pending.clear()
         if self.server is not None:
             self._stopping = True
             self.server.close()
             await self.server.wait_closed()
             self.server = None
-        for task in self._background_tasks:
+        tasks = [*self._background_tasks, *self._supersede_tasks]
+        for task in tasks:
             task.cancel()
-        if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self._supersede_tasks.clear()
+        self._active.clear()
+        self._superseded.clear()
 
     def _start_timing(self, charge_point_id: str) -> None:
         if self.on_upstream_connected is None:
             return
         if self._background_tasks:
+            # One timing job runs at a time; queue each charger ID once so a
+            # reconnect during another charger's job is never dropped.
             self.counters["timing_coalesced"] += 1
-            self._timing_pending = charge_point_id
+            self._timing_pending[charge_point_id] = None
             return
         self.counters["timing_attempts"] += 1
         task = asyncio.create_task(self.on_upstream_connected(charge_point_id))
@@ -218,10 +288,10 @@ class OcppWebSocketRelay:
         error = task.exception()
         if error is not None:
             LOGGER.error("timing_task_failed error_type=%s", type(error).__name__)
-        pending = self._timing_pending
-        if pending is not None and not self._stopping:
-            self._timing_pending = None
-            self._start_timing(pending)
+        if self._timing_pending and not self._stopping:
+            next_id = next(iter(self._timing_pending))
+            del self._timing_pending[next_id]
+            self._start_timing(next_id)
 
     async def _handle_charger(self, charger, path: str) -> None:
         source = self._source(charger)
@@ -236,6 +306,9 @@ class OcppWebSocketRelay:
             await charger.close(code=1008, reason="path rejected")
             return
         upstream_path, charge_point_id = resolved
+        if not self._claim(charge_point_id, source, charger):
+            await charger.close(code=1008, reason="charge point already connected")
+            return
 
         self.counters["accepted_connections"] += 1
         LOGGER.info(
@@ -271,15 +344,56 @@ class OcppWebSocketRelay:
             if not charger.closed:
                 await charger.close(code=1011, reason="upstream unavailable")
         finally:
+            self._release(charge_point_id, charger)
+            cause = termination.cause
+            if id(charger) in self._superseded:
+                self._superseded.discard(id(charger))
+                cause = "superseded"
             LOGGER.info(
                 "connection_closed source=%s charge_point_id=%s cause=%s "
                 "charger_code=%s upstream_code=%s",
                 source,
                 charge_point_id,
-                termination.cause,
+                cause,
                 charger.close_code,
                 termination.upstream_code,
             )
+
+    def _claim(self, charge_point_id: str, source: str, charger) -> bool:
+        """Register the session for its ID, replacing a stale one from the same source."""
+        active = self._active.get(charge_point_id)
+        if active is not None:
+            active_source, active_charger = active
+            if active_source != source:
+                self.counters["rejected_duplicate_id"] += 1
+                LOGGER.warning(
+                    "opening_rejected reason=duplicate_id source=%s charge_point_id=%s",
+                    source,
+                    charge_point_id,
+                )
+                return False
+            # The same charger reconnecting: its previous session is stale, and
+            # keepalive pings are off, so close it rather than lock the charger
+            # out until TCP notices.
+            self.counters["superseded_sessions"] += 1
+            LOGGER.warning(
+                "session_superseded source=%s charge_point_id=%s",
+                source,
+                charge_point_id,
+            )
+            self._superseded.add(id(active_charger))
+            task = asyncio.create_task(
+                active_charger.close(code=1001, reason="superseded by reconnect")
+            )
+            self._supersede_tasks.add(task)
+            task.add_done_callback(self._supersede_tasks.discard)
+        self._active[charge_point_id] = (source, charger)
+        return True
+
+    def _release(self, charge_point_id: str, charger) -> None:
+        active = self._active.get(charge_point_id)
+        if active is not None and active[1] is charger:
+            del self._active[charge_point_id]
 
     async def _bridge(self, charger, upstream) -> BridgeTermination:
         oversized_message = asyncio.Event()

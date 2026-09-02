@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ipaddress
 import json
 import logging
 import os
@@ -16,7 +15,10 @@ from .server import (
     OcppWebSocketRelay,
     RelayConfig,
     is_canonical_path,
+    MIN_IPV4_PREFIX,
+    MIN_IPV6_PREFIX,
     is_valid_charge_point_id,
+    normalize_source,
 )
 from .timing import HomeAssistantTimingClient, TimingController
 
@@ -44,11 +46,12 @@ def config_from_options(options: dict[str, Any]) -> RelayConfig:
     if not isinstance(sources, list) or not 1 <= len(sources) <= MAX_ALLOWLIST_ENTRIES:
         raise ValueError("allowed_sources must be a bounded non-empty list")
     try:
-        normalized_sources = tuple(
-            str(ipaddress.ip_address(value)) for value in sources
-        )
+        normalized_sources = tuple(normalize_source(value) for value in sources)
     except (TypeError, ValueError) as exc:
-        raise ValueError("allowed_sources must contain IP addresses") from exc
+        raise ValueError(
+            "allowed_sources must contain IP addresses or CIDR networks "
+            f"no broader than /{MIN_IPV4_PREFIX} (IPv4) or /{MIN_IPV6_PREFIX} (IPv6)"
+        ) from exc
     if len(set(normalized_sources)) != len(normalized_sources):
         raise ValueError("allowed_sources contains duplicates")
 

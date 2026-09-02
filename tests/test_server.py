@@ -71,13 +71,22 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def close_server(self, relay):
         await relay.stop()
 
-    def connect(self, port, *, path="/central/central", subprotocols=("ocpp1.6",)):
+    def connect(
+        self,
+        port,
+        *,
+        path="/central/central",
+        subprotocols=("ocpp1.6",),
+        local_address=None,
+    ):
+        extra = {"local_addr": (local_address, 0)} if local_address else {}
         return websockets.connect(
             f"ws://127.0.0.1:{port}{path}",
             subprotocols=list(subprotocols),
             ping_interval=None,
             compression=None,
             max_size=None,
+            **extra,
         )
 
     async def test_charger_and_upstream_are_separate_sessions_and_forward_both_ways(
@@ -193,6 +202,91 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         pass
         self.assertEqual(relay.counters["rejected_path"], 8)
         self.assertEqual(self.upstream_connections, [])
+
+    async def test_same_source_reconnect_supersedes_stale_session(self):
+        relay, port = await self.start_relay(learn_charge_point_id=True)
+        logger = logging.getLogger("ocular_ocpp_websocket_proxy")
+        with self.assertLogs(logger, level="INFO") as captured:
+            stale = await self.connect(port, path="/site/cp1")
+            self.addAsyncCleanup(stale.close)
+            await stale.send("one")
+            self.assertEqual(await stale.recv(), "upstream:one")
+            self.assertEqual(relay.active_charge_point_ids, ("cp1",))
+            async with self.connect(port, path="/site/cp1") as fresh:
+                with self.assertRaises(websockets.ConnectionClosed) as raised:
+                    await asyncio.wait_for(stale.recv(), 1)
+                self.assertEqual(raised.exception.code, 1001)
+                await fresh.send("two")
+                self.assertEqual(await fresh.recv(), "upstream:two")
+                self.assertEqual(relay.active_charge_point_ids, ("cp1",))
+            await asyncio.sleep(0.05)
+        self.assertEqual(relay.active_charge_point_ids, ())
+        self.assertEqual(relay.counters["superseded_sessions"], 1)
+        self.assertEqual(relay.counters["rejected_duplicate_id"], 0)
+        self.assertEqual(len(self.upstream_connections), 2)
+        output = "\n".join(captured.output)
+        self.assertIn("session_superseded", output)
+        self.assertIn("cause=superseded", output)
+
+    async def test_duplicate_id_from_another_source_is_rejected(self):
+        relay, port = await self.start_relay(
+            learn_charge_point_id=True, allowed_sources=("127.0.0.0/16",)
+        )
+        async with self.connect(port, path="/site/cp1") as first:
+            with self.assertRaises((InvalidStatusCode, ConnectionClosedError)) as raised:
+                async with self.connect(
+                    port, path="/site/cp1", local_address="127.0.0.2"
+                ):
+                    pass
+            if isinstance(raised.exception, InvalidStatusCode):
+                self.assertEqual(raised.exception.status_code, 409)
+            async with self.connect(
+                port, path="/site/cp2", local_address="127.0.0.2"
+            ) as other:
+                await other.send("hi")
+                self.assertEqual(await other.recv(), "upstream:hi")
+            await first.send("still")
+            self.assertEqual(await first.recv(), "upstream:still")
+        self.assertEqual(relay.counters["rejected_duplicate_id"], 1)
+        self.assertEqual(relay.counters["superseded_sessions"], 0)
+        self.assertEqual(sorted(self.upstream_paths), ["/site/cp1", "/site/cp2"])
+
+    async def test_cidr_allowlist_admits_only_addresses_inside_the_network(self):
+        relay, port = await self.start_relay(allowed_sources=("127.0.0.0/24",))
+        async with self.connect(port) as charger:
+            await charger.send("in")
+            self.assertEqual(await charger.recv(), "upstream:in")
+        with self.assertRaises((InvalidStatusCode, ConnectionClosedError)):
+            async with self.connect(port, local_address="127.0.1.9"):
+                pass
+        self.assertEqual(relay.counters["rejected_source"], 1)
+
+    async def test_timing_queue_keeps_every_charger_id_in_order(self):
+        started = []
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def apply_timing(charge_point_id):
+            started.append(charge_point_id)
+            if charge_point_id == "a":
+                await release.wait()
+            if len(started) == 4:
+                finished.set()
+
+        relay, _ = await self.start_relay(
+            learn_charge_point_id=True, on_upstream_connected=apply_timing
+        )
+        relay._start_timing("a")
+        await asyncio.sleep(0)
+        relay._start_timing("b")
+        relay._start_timing("c")
+        relay._start_timing("b")
+        relay._start_timing("a")
+        release.set()
+        await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(started, ["a", "b", "c", "a"])
+        self.assertEqual(relay.counters["timing_attempts"], 4)
+        self.assertEqual(relay.counters["timing_coalesced"], 4)
 
     async def test_source_path_and_subprotocol_rejections_fail_closed(self):
         relay, port = await self.start_relay(allowed_sources=("192.0.2.1",))
@@ -498,6 +592,26 @@ class RelayConfigTests(unittest.TestCase):
         learned = RelayConfig(
             **common, upstream_path=None, charge_point_id=None, expected_paths=()
         )
+        self.assertTrue(learned.allows_source("127.0.0.1"))
+        self.assertFalse(learned.allows_source("127.0.0.2"))
+        self.assertFalse(learned.allows_source("unknown"))
+        network = RelayConfig(
+            **{**common, "allowed_sources": ("192.168.1.0/24", "fd00::/64")},
+            upstream_path=None,
+            charge_point_id=None,
+            expected_paths=(),
+        )
+        self.assertTrue(network.allows_source("192.168.1.250"))
+        self.assertFalse(network.allows_source("192.168.2.1"))
+        self.assertTrue(network.allows_source("fd00::5"))
+        for bad in ((), ("192.168.1.5/24",), ("10.0.0.0/8",), ("::/0",), ("x",)):
+            with self.subTest(sources=bad), self.assertRaises(ValueError):
+                RelayConfig(
+                    **{**common, "allowed_sources": bad},
+                    upstream_path=None,
+                    charge_point_id=None,
+                    expected_paths=(),
+                )
         self.assertTrue(learned.learns_charge_point_id)
         self.assertEqual(learned.resolve("/a/b"), ("/a/b", "b"))
         self.assertIsNone(learned.resolve("/a/b/"))

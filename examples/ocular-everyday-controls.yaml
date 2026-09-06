@@ -33,7 +33,7 @@ script:
     mode: single
     sequence:
       - variables:
-          requested_amps: "{{ states('input_number.ocular_charge_current') | int(6) }}"
+          requested_amps: "{{ states('input_number.ocular_charge_current') }}"
           transaction_id: "{{ states('sensor.ocular_transaction_id') }}"
       - choose:
           - conditions:
@@ -49,6 +49,11 @@ script:
                     A charging transaction is already active. Use Resume rather than
                     starting another transaction.
         default:
+          - condition: template
+            value_template: >-
+              {% set target = requested_amps | float(-1) %}
+              {{ 6 <= target <= 32 and target == target | int(0)
+                 and target <= state_attr('input_number.ocular_charge_current', 'max') | float(0) }}
           - action: number.set_value
             target:
               entity_id: number.ocular_maximum_current
@@ -95,7 +100,7 @@ script:
               'transactionId': transaction_id | int,
               'stackLevel': 1,
               'chargingProfilePurpose': 'TxProfile',
-              'chargingProfileKind': 'Absolute',
+              'chargingProfileKind': 'Relative',
               'chargingSchedule': {
                 'chargingRateUnit': 'A',
                 'chargingSchedulePeriod': [
@@ -130,7 +135,7 @@ script:
     sequence:
       - variables:
           transaction_id: "{{ states('sensor.ocular_transaction_id') }}"
-          requested_amps: "{{ states('input_number.ocular_charge_current') | int(6) }}"
+          requested_amps: "{{ states('input_number.ocular_charge_current') }}"
       - choose:
           - conditions:
               - condition: template
@@ -138,6 +143,28 @@ script:
                   {{ transaction_id not in ['unknown', 'unavailable', 'none', '']
                      and transaction_id | int(-1) > 0 }}
             sequence:
+              # Manual-only example: do not run competing policy writers. Recheck
+              # the captured request after settling; changing the slider cancels it.
+              - delay: "00:00:15"
+              - alias: Revalidate manual resume authority
+                condition: template
+                value_template: >-
+                  {% set target = states('input_number.ocular_charge_current') | float(-1) %}
+                  {% set cap = state_attr('input_number.ocular_charge_current', 'max') | float(0) %}
+                  {% set age = as_timestamp(now()) - as_timestamp(states('sensor.ocular_heartbeat'), 0) %}
+                  {{ 0 <= age < 120
+                     and is_state('switch.ocular_charge_control', 'on')
+                     and is_state('sensor.ocular_error_code_connector', 'NoError')
+                     and states('sensor.ocular_status_connector') in ['Charging', 'SuspendedEVSE']
+                     and states('sensor.ocular_transaction_id') | int(0) == transaction_id | int(-1)
+                     and transaction_id | int(0) > 0
+                     and 6 <= target <= 32 and target <= cap
+                     and target == target | int(0)
+                     and target == requested_amps | float(-1) }}
+              - variables:
+                  command_at: "{{ as_timestamp(now()) }}"
+              # Replace our hold, not a generic station/default limit. Keep this
+              # identity identical to Pause; never clear other owners' profiles.
               - action: ocpp.set_charge_rate
                 data:
                   devid: "central"
@@ -148,20 +175,24 @@ script:
                       'transactionId': transaction_id | int,
                       'stackLevel': 1,
                       'chargingProfilePurpose': 'TxProfile',
-                      'chargingProfileKind': 'Absolute',
+                      'chargingProfileKind': 'Relative',
                       'chargingSchedule': {
                         'chargingRateUnit': 'A',
                         'chargingSchedulePeriod': [
-                          {'startPeriod': 0, 'limit': requested_amps,
+                          {'startPeriod': 0, 'limit': requested_amps | int,
                            'numberPhases': 1}
                         ]
                       }
                     } | to_json }}
               - wait_template: >-
-                  {{ states('sensor.ocular_status_connector') == 'Charging'
-                     or (states('sensor.ocular_current_import') not in
-                         ['unknown', 'unavailable', 'none', '']
-                         and states('sensor.ocular_current_import') | float(-1) > 1) }}
+                  {% set current = states.sensor.ocular_current_import %}
+                  {{ current is defined and current is not none
+                     and as_timestamp(current.last_reported, 0) > command_at | float
+                     and is_state('switch.ocular_charge_control', 'on')
+                     and is_state('sensor.ocular_error_code_connector', 'NoError')
+                     and states('sensor.ocular_transaction_id') | int(0) == transaction_id | int
+                     and states('sensor.ocular_status_connector') == 'Charging'
+                     and states('sensor.ocular_current_import') | float(-1) > 1 }}
                 timeout: "00:01:30"
                 continue_on_timeout: true
               - if:

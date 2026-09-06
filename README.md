@@ -210,6 +210,8 @@ For a simple charger dashboard, use the generic examples in [`examples/README.md
 
 These examples are intentionally independent of any particular home's solar, tariff or battery policy. Automatic finishing is disabled until the user enables it, and routine reset controls are deliberately excluded.
 
+Pause and Resume must replace the **same transaction-bound profile**, changing only its current limit. A generic `limit_amps`/Maximum Current update can succeed while leaving the 0 A hold in place. The examples use a matched Relative `TxProfile` pair (ID 3001, stack 1, connector 1); use Resume to apply the selected current during an active session too. See the [ownership, commissioning and verification requirements](examples/README.md#resume). This is Home Assistant control logic, not a relay or firmware fix.
+
 ## Charger control workarounds
 
 The connection relay is only one part of a reliable installation. See [Ocular charger control workarounds](CHARGER_CONTROL_WORKAROUNDS.md) for the field-tested transaction and recovery rules:

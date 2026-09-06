@@ -105,6 +105,20 @@ Pause sends a transaction-bound `TxProfile` at 0 A. The expected state is `Suspe
 
 Resume replaces that same transaction profile with the selected whole-amp limit. It does not send another remote-start request.
 
+**Do not substitute `limit_amps`, `number.set_value` or the integration's Maximum Current control for Resume.** A generic setter may update a station-wide/default profile and report success without replacing the transaction's 0 A hold. Pause and Resume here both own connector **1**, profile **3001**, stack **1**, purpose **TxProfile**, kind **Relative**, unit **A**, and a period starting at **0**, bound to the same current transaction. Only the limit changes. Keep both identities matched if adapting them; do not copy another installation's profile IDs or broadly clear profiles. A separate station-wide zero/lower ceiling still constrains charging and is intentionally not cleared by this example.
+
+The underlying same-profile replacement repair has been observed to resume charging on the same transaction in a deployed installation. That does not qualify these generic examples for every charger, integration or vehicle. Confirm your integration accepts `custom_profile` JSON and exposes current `last_reported` timestamps. The public example retains its own profile ID/stack rather than importing private site policy.
+
+Resume waits 15 seconds, then rechecks an unchanged whole-amp slider request, its commissioned maximum (never above 32 A), the same positive transaction, Charge Control on, NoError, Charging or SuspendedEVSE, and a heartbeat less than 120 seconds old (not future-dated). If a guard fails, the script stops without a command; inspect the script trace. It then waits up to 90 seconds for newly reported current above 1 A with Charging on that same transaction. Status or a successful service response alone is not physical resume; check fresh power/current against the intended target too. Failure does not trigger retries, a new transaction, clearing or reset.
+
+These are **manual controls, not an energy-policy coordinator**. Disable competing normal writers before commissioning and do not press conflicting controls during an in-flight command. Separate `mode: single` scripts are not a global command lock. For automation, route all writes through one serialized authority and preserve your own safety/headroom/eligibility guards, post-reconnect coherent telemetry and dwell; a fresh heartbeat alone does not prove that every retained entity belongs to a fresh connection. This example does not implement policy-generation fencing or automatic reconnect recovery.
+
+### Change current during an active session
+
+The slider selects a target; moving it alone sends no charger command. After selecting the target, press **Resume** to replace the same owned profile while Charging or SuspendedEVSE. Leave about 60 seconds between routine increases, confirm physical readback, and do not compete with a pending Pause/Stop. The generic Maximum Current setter remains only in Start's pre-transaction setup; it is not the active-session adjustment path.
+
+There is no Charge Now helper in this package. If adding a manual Charge Now permission elsewhere, do not assume completion or disconnect clears it: that requires a separate explicit policy. These examples neither session-clear such permission nor automatically restart a completed transaction.
+
 ### Stop
 
 Stop turns off `Charge Control`, then waits for all of these:
@@ -138,8 +152,8 @@ Test while the vehicle can accept charge and someone is present:
 
 1. Select 6 A and press Start.
 2. Confirm the charger reports real current and power.
-3. Increase the current without exceeding the commissioned limit.
-4. Return to 6 A and confirm current falls.
+3. Select a higher current within the commissioned limit, then press Resume to apply it; confirm new measured current/power. Allow about 60 seconds between routine increases.
+4. Select 6 A, press Resume, and confirm current falls.
 5. Press Pause and confirm current reaches zero while the transaction ID remains active.
 6. Press Resume and confirm the same transaction continues.
 7. Press Stop and confirm transaction ID 0, zero current, and `Finishing` or `Available`.

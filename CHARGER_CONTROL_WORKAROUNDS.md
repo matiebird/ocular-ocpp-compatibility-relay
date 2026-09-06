@@ -16,7 +16,7 @@ A temporary pause should preserve the active transaction. Send a transaction-bou
     "transactionId": 123,
     "stackLevel": 1,
     "chargingProfilePurpose": "TxProfile",
-    "chargingProfileKind": "Absolute",
+    "chargingProfileKind": "Relative",
     "chargingSchedule": {
       "chargingRateUnit": "A",
       "chargingSchedulePeriod": [
@@ -50,7 +50,9 @@ measured current = 0 A
 connector status = Finishing or Available
 ```
 
-Profile IDs and stack levels are central-system ownership choices. The values above match the tested installation; avoid collisions with profiles owned by another controller.
+Profile IDs and stack levels are central-system ownership choices. The values above are illustrative; the [Home Assistant package](examples/ocular-everyday-controls.yaml) retains its own ID 3001 and stack 1. Avoid collisions with profiles owned by another controller, and keep the pause/resume pair identical except for its authorized limit. Use a Relative schedule bound to the active transaction.
+
+A generic `limit_amps` or Maximum Current update may only alter a station-wide/default profile and leave a transaction-bound 0 A hold in force. Explicitly replace the owned hold profile for both resume and active-session current adjustment. Do not broadly clear profiles: other station-wide ceilings remain authoritative and can still prevent charging. Require fresh measured current on the same transaction; neither an accepted service call nor a retained current setting proves resume.
 
 ## Do not blindly retry timed-out commands
 

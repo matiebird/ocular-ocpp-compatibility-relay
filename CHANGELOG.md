@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Home Assistant examples and documentation
+
+- Use matched Relative transaction profiles for Pause/Resume, retaining example profile ID 3001 and stack level 1; explain why a generic current setter can leave a 0 A transaction hold in place.
+- Revalidate manual Resume after a bounded dwell against the same transaction, fresh heartbeat, charge-control/error/status and unchanged commissioned 6–32 A target; require newly reported current rather than status alone for resume confirmation.
+- Document same-profile active-session rate adjustment, single-owner commissioning and retained station-wide ceilings; add actual-YAML Jinja regression tests. No relay runtime or version change.
+
 ## 0.3.12
 
 - Stop cleanly on SIGTERM/SIGINT so app stop and restart close charger sessions with a WebSocket close frame instead of waiting for the container kill timeout, and log `relay_shutdown` for those closures.
